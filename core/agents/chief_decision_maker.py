@@ -1,6 +1,6 @@
-from typing import Dict, Any
-from core.agents.base_agent import BaseAgent
 from loguru import logger
+from core.agents.base_agent import BaseAgent
+from config.settings import AGENT_MODELS, AGENT_TEMPERATURES
 
 class ChiefDecisionMakerAgent(BaseAgent):
     """
@@ -25,11 +25,13 @@ class ChiefDecisionMakerAgent(BaseAgent):
     }
     """
 
-    def __init__(self, temperature: float = 0.1):
-        # 為了確保 JSON 格式穩定，temperature 盡量低
+    def __init__(self, temperature: float = None):
+        model = AGENT_MODELS["chief"]
+        temp = temperature if temperature is not None else AGENT_TEMPERATURES["chief"]
         super().__init__(
+            model_name=model,
             system_instruction=self.SYSTEM_INSTRUCTION,
-            temperature=temperature
+            temperature=temp
         )
 
     def analyze(self, symbol: str, name: str, current_price: float, tech_report: str, sent_report: str, risk_report: str) -> Dict[str, Any]:

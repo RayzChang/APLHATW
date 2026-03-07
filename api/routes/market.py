@@ -1,99 +1,96 @@
 """
-全市場列表 API — 每檔標的後附強力買入/強力賣出等建議
+市場數據 API — 大盤指數與開休市狀態
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from fastapi import APIRouter, Query
-
-from core.data.tw_data_fetcher import TWDataFetcher
-from core.analysis.indicators import add_all_indicators, calc_buy_sell_score
-from datetime import datetime, timedelta
+import requests
+import time
+from fastapi import APIRouter, Request
+from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
-_executor = ThreadPoolExecutor(max_workers=10)
 
-
-def _score_to_signal(score: int) -> str:
-    """評分轉建議：強力買入、買入、觀望、賣出、強力賣出"""
-    if score >= 3:
-        return "強力買入"
-    if score >= 2:
-        return "買入"
-    if score >= -1:
-        return "觀望"
-    if score >= -2:
-        return "賣出"
-    return "強力賣出"
-
-
-def _analyze_one(fetcher: TWDataFetcher, symbol: str, start: str, end_str: str) -> dict | None:
-    """單一標的分析（供並行呼叫）"""
+@router.get("/index")
+def get_market_index(request: Request):
+    """
+    取得大盤指數 (加權指數 ^TWII)
+    """
+    from loguru import logger
+    fetcher = request.app.state.fetcher
+    
+    # 方案 A: 嘗試使用常規 fetcher (支援 ^TWII 或 tx)
     try:
-        sdf = fetcher.fetch_klines(str(symbol), start, end_str)
-        if sdf.empty or len(sdf) < 30:
-            return None
-        sdf = add_all_indicators(sdf)
-        row = sdf.iloc[-1]
-        score = calc_buy_sell_score(row)
-        prev = sdf.iloc[-2] if len(sdf) >= 2 else row
-        change_pct = ((row["close"] - prev["close"]) / prev["close"] * 100) if prev["close"] else 0
-        name = fetcher.get_symbol_name(str(symbol))
-        return {
-            "symbol": str(symbol),
-            "name": name,
-            "close": round(float(row["close"]), 2),
-            "change_pct": round(change_pct, 2),
-            "signal": _score_to_signal(score),
-            "score": score,
+        # 特別針對大盤，直接嘗試 tse_t00.tw
+        res = fetcher.fetch_realtime_quote("t00") 
+        if res and res.get("price"):
+            return {
+                "index": res["price"],
+                "change": round(res["price"] * (res["change_pct"]/100), 2) if res.get("change_pct") else 0.0,
+                "change_pct": res.get("change_pct", 0.0),
+                "timestamp": res.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            }
+    except Exception as e:
+        logger.debug(f"Fetcher A failed for index: {e}")
+
+    # 方案 B: 直接備援 MIS API
+    try:
+        url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://mis.twse.com.tw/stock/index.jsp"
         }
-    except Exception:
-        return None
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.ok:
+            data = r.json()
+            msg_array = data.get("msgArray", [])
+            if msg_array:
+                row = msg_array[0]
+                z_val = row.get("z", "-")
+                prev_close = float(row.get("y", 0))
+                # 沒成交(休市)就用昨收
+                price = float(z_val) if z_val != "-" else prev_close
+                change = price - prev_close
+                change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
+                return {
+                    "index": price,
+                    "change": round(change, 2),
+                    "change_pct": change_pct,
+                    "timestamp": f"{row.get('d', '')} {row.get('t', '')}"
+                }
+    except Exception as e:
+        logger.error(f"Fetcher B fallback failed for index: {e}")
+        
+    return {
+        "index": 0.0,
+        "change": 0.0,
+        "change_pct": 0.0,
+        "timestamp": "",
+        "error": "無法取得大盤資料"
+    }
 
-
-@router.get("/list")
-def get_market_list(
-    market: str = Query("all", description="listed=上市 | otc=上櫃 | all=全部"),
-    limit: int = Query(50, ge=10, le=200, description="最多回傳筆數"),
-):
+@router.get("/status")
+def get_market_status():
     """
-    取得台股市場列表，每檔附建議。使用並行請求加速（約 10–30 秒）。
+    判斷台股當前是否為交易時間 (週一~五 09:00~13:30 台灣時間)
     """
-    fetcher = TWDataFetcher()
-    df = fetcher.get_stock_list(market)
-    if df.empty:
-        return {"count": 0, "results": []}
+    # 台灣時區 UTC+8
+    tz_tw = timezone(timedelta(hours=8))
+    now = datetime.now(tz_tw)
     
-    stock_id_col = "stock_id" if "stock_id" in df.columns else "symbol"
-    symbols = df[stock_id_col].dropna().unique().tolist()[:limit]
+    is_open = False
+    message = "市場休市中"
     
-    end = datetime.now()
-    start = (end - timedelta(days=60)).strftime("%Y-%m-%d")
-    end_str = end.strftime("%Y-%m-%d")
-    
-    results = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = {ex.submit(_analyze_one, fetcher, str(s), start, end_str): s for s in symbols}
-        for future in as_completed(futures):
-            r = future.result()
-            if r:
-                results.append(r)
-    
-    order = {"強力買入": 0, "買入": 1, "觀望": 2, "賣出": 3, "強力賣出": 4}
-    results.sort(key=lambda x: (order.get(x["signal"], 2), -x["score"]))
-    
-    return {"count": len(results), "results": results}
-
-
-@router.get("/list/simple")
-def get_market_list_simple(
-    market: str = Query("all", description="listed | otc | all"),
-):
-    """僅取得股票清單（代碼、名稱），不含分析。用於下拉選單等。"""
-    fetcher = TWDataFetcher()
-    df = fetcher.get_stock_list(market)
-    if df.empty:
-        return {"count": 0, "results": []}
-    stock_id_col = "stock_id" if "stock_id" in df.columns else "symbol"
-    name_col = "stock_name" if "stock_name" in df.columns else "name"
-    results = [{"symbol": str(r[stock_id_col]), "name": str(r.get(name_col, r[stock_id_col]))} for _, r in df.iterrows()]
-    return {"count": len(results), "results": results}
+    # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+    if 0 <= now.weekday() <= 4:
+        # 判斷時間範圍
+        current_time = now.time()
+        start_time = datetime.strptime("09:00", "%H:%M").time()
+        end_time = datetime.strptime("13:30", "%H:%M").time()
+        
+        if start_time <= current_time <= end_time:
+            is_open = True
+            message = "市場開盤中"
+            
+    return {
+        "is_open": is_open,
+        "message": message
+    }

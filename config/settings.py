@@ -73,3 +73,18 @@ SCREENER_STRATEGIES = [
     {"id": "bb_upper", "name": "布林突破上軌", "type": "buy", "condition": "%B > 1.0"},
     {"id": "bb_lower", "name": "布林跌破下軌", "type": "buy", "condition": "%B < 0.0"},
 ]
+
+# === Agent Model Settings ===
+AGENT_MODELS = {
+    "technical":  "gemini-2.0-flash",   # 原 lite 版不再提供
+    "sentiment":  "gemini-2.5-flash", 
+    "risk":       "gemini-2.0-flash",   # 原 lite 版不再提供
+    "chief":      "gemini-2.5-flash", 
+}
+
+AGENT_TEMPERATURES = {
+    "technical":  0.1,
+    "sentiment":  0.3,
+    "risk":       0.1,
+    "chief":      0.1,
+}

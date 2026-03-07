@@ -1,8 +1,8 @@
-from typing import List, Dict, Any
-from core.agents.base_agent import BaseAgent
 import json
 from loguru import logger
+from core.agents.base_agent import BaseAgent
 from core.data.news_fetcher import NewsItem
+from config.settings import AGENT_MODELS, AGENT_TEMPERATURES
 
 class SentimentAnalystAgent(BaseAgent):
     """
@@ -19,10 +19,14 @@ class SentimentAnalystAgent(BaseAgent):
     3. 潛在的新聞風險提示 (如果有)
     """
 
-    def __init__(self, temperature: float = 0.3):
+    def __init__(self, temperature: float = None, enable_search: bool = False):
+        model = AGENT_MODELS["sentiment"]
+        temp = temperature if temperature is not None else AGENT_TEMPERATURES["sentiment"]
         super().__init__(
+            model_name=model,
             system_instruction=self.SYSTEM_INSTRUCTION,
-            temperature=temperature
+            temperature=temp,
+            enable_search=enable_search
         )
 
     def analyze(self, symbol: str, name: str, news_items: List[NewsItem]) -> str:

@@ -1,106 +1,103 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Settings } from 'lucide-react';
+import api from '../../api/axiosConfig';
 
 interface NavbarProps {
     onSettingsClick: () => void;
 }
 
 export function Navbar({ onSettingsClick }: NavbarProps) {
-    const [taiex, setTaiex] = useState({ index: 0, change: 0 });
-    const [isMarketOpen, setIsMarketOpen] = useState(false);
-
-    const checkMarketOpen = () => {
-        const now = new Date();
-        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-        const twTime = new Date(utc + (3600000 * 8));
-        const day = twTime.getDay();
-        const timeVal = twTime.getHours() * 100 + twTime.getMinutes();
-        
-        if (day === 0 || day === 6) return false;
-        if (timeVal >= 900 && timeVal <= 1330) return true;
-        return false;
-    };
+    const [taiex, setTaiex] = useState({ index: 0, change: 0, change_pct: 0 });
+    const [marketStatus, setMarketStatus] = useState({ is_open: false, message: '載入中...' });
 
     useEffect(() => {
-        const fetchTaiex = async () => {
+        const fetchMarketData = async () => {
             try {
-                const response = await fetch('/api/index');
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.index !== null) {
-                        setTaiex({ index: data.index, change: data.change });
-                        setIsMarketOpen(checkMarketOpen());
-                    }
+                const indexRes = await api.get('/api/market/index');
+                if (indexRes.data && indexRes.data.index) {
+                    setTaiex({ 
+                        index: indexRes.data.index, 
+                        change: indexRes.data.change,
+                        change_pct: indexRes.data.change_pct
+                    });
+                }
+                const statusRes = await api.get('/api/market/status');
+                if (statusRes.data) {
+                    setMarketStatus(statusRes.data);
                 }
             } catch (error) {
-                console.error("Failed to fetch TAIEX", error);
+                console.error("Failed to fetch market data", error);
             }
         };
 
-        fetchTaiex();
-        const interval = setInterval(fetchTaiex, 5000);
+        fetchMarketData();
+        const interval = setInterval(fetchMarketData, 5000);
         return () => clearInterval(interval);
     }, []);
 
-    const hasApiKey = !!localStorage.getItem('gemini_api_key');
+    const navLinkClass = ({ isActive }: { isActive: boolean }) => 
+        `px-6 py-2 rounded-lg text-sm font-bold transition-all duration-300 flex items-center gap-2 ${
+            isActive 
+            ? 'bg-brand-primary/10 text-brand-primary shadow-[0_0_15px_rgba(99,102,241,0.2)] border border-brand-primary/30' 
+            : 'text-text-muted hover:text-text-main hover:bg-white/5'
+        }`;
 
     return (
-        <nav className="h-16 border-b border-white/10 bg-panel px-6 flex items-center justify-between sticky top-0 z-50">
-            <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                    <img src="/logo.png" alt="AlphaTW" className="h-8 w-auto object-contain drop-shadow-[0_0_8px_rgba(0,240,255,0.6)]" />
-                    <span className="text-xl font-bold bg-gradient-to-r from-brand-400 to-indigo-400 bg-clip-text text-transparent transform translate-y-[2px]">
-                        AlphaTW <span className="text-xs bg-brand-600/30 text-brand-300 px-2 py-0.5 rounded ml-2">WEB</span>
-                    </span>
+        <nav className="h-20 border-b border-card-border bg-bg-main/80 backdrop-blur-md px-8 flex items-center justify-between sticky top-0 z-50">
+            {/* Left: Logo */}
+            <div className="flex items-center gap-3">
+                <div className="relative group">
+                    <img src="/logo.png" alt="AlphaTW" className="h-10 w-auto object-contain drop-shadow-[0_0_10px_rgba(99,102,241,0.5)] transition-transform group-hover:scale-110" />
                 </div>
-
-                <div className="flex items-center gap-4 text-sm transform translate-y-[2px]">
-                    <div className="flex items-center gap-1.5">
-                        <span className={`w-2 h-2 rounded-full ${isMarketOpen ? 'bg-success' : 'bg-gray-500'} animate-pulse`} />
-                        <span className={isMarketOpen ? 'text-success' : 'text-gray-400'}>
-                            {isMarketOpen ? '市場開盤中' : '市場已收盤'}
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                        <span className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-success' : 'bg-danger'}`} />
-                        <span className={hasApiKey ? "text-success" : "text-gray-400"}>
-                            {hasApiKey ? 'API 已連線' : '未設定 API Key'}
-                        </span>
-                    </div>
+                <div className="flex flex-col">
+                    <span className="text-xl font-black tracking-tighter text-text-main">
+                        Alpha<span className="text-brand-primary">TW</span>
+                    </span>
+                    <span className="text-[10px] uppercase tracking-widest text-brand-primary/60 font-bold">Terminal v2.0</span>
                 </div>
             </div>
 
-            <div className="flex items-center gap-4">
-            <div className="flex bg-black/30 rounded-lg p-1">
-                    <NavLink 
-                        to="/" 
-                        className={({ isActive }) => 
-                            `px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-brand-600/20 text-brand-400' : 'text-gray-400 hover:text-gray-200'}`
-                        }
-                    >
-                        交易平台
-                    </NavLink>
-                    <NavLink 
-                        to="/picker" 
-                        className={({ isActive }) => 
-                            `px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-brand-600/20 text-brand-400' : 'text-gray-400 hover:text-gray-200'}`
-                        }
-                    >
-                        選股器
-                    </NavLink>
+            {/* Center: Navigation Group */}
+            <div className="flex items-center bg-black/20 rounded-xl p-1 border border-white/5">
+                <NavLink to="/" className={navLinkClass}>
+                    交易平台
+                </NavLink>
+                <NavLink to="/picker" className={navLinkClass}>
+                    選股器
+                </NavLink>
+                <button 
+                    onClick={onSettingsClick}
+                    className="px-6 py-2 rounded-lg text-sm font-bold text-text-muted hover:text-text-main hover:bg-white/5 transition-all"
+                >
+                    系統設定
+                </button>
+            </div>
+
+            {/* Right: TAIEX Cluster */}
+            <div className="flex items-center gap-8">
+                <div className="flex flex-col items-end">
+                    <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-0.5">加權指數</span>
+                    <div className="flex items-baseline gap-3">
+                        <span className="text-2xl font-black font-mono text-text-main leading-none">
+                            {taiex.index?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        <div className={`flex flex-col items-end leading-tight ${taiex.change >= 0 ? 'text-danger' : 'text-success'}`}>
+                            <span className="text-xs font-bold font-mono">
+                                {taiex.change >= 0 ? '▲' : '▼'} {Math.abs(taiex.change).toFixed(2)}
+                            </span>
+                            <span className="text-[10px] font-bold font-mono">
+                                ({taiex.change_pct >= 0 ? '+' : ''}{taiex.change_pct}%)
+                            </span>
+                        </div>
+                    </div>
                 </div>
 
-                <button onClick={onSettingsClick} className="btn bg-white/5 hover:bg-white/10 border border-white/5 text-gray-200 gap-2">
-                    <Settings className="h-4 w-4" />
-                    設定
-                </button>
+                <div className="h-10 w-[1px] bg-white/10" />
 
-                <div className="flex items-center gap-3 bg-black/40 border border-white/5 rounded-lg px-4 py-2">
-                    <span className="text-sm text-gray-400">加權指數</span>
-                    <span className="font-mono font-bold text-white">{taiex.index?.toLocaleString()}</span>
-                    <span className={`text-sm font-mono ${taiex.change === null ? 'text-gray-400' : (taiex.change >= 0 ? 'text-success' : 'text-danger')}`}>
-                        {taiex.change === null ? '' : (taiex.change > 0 ? '+' : '')}{taiex.change === null ? '0.00' : taiex.change}%
+                <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-lg border border-white/5">
+                    <span className={`w-2 h-2 rounded-full ${marketStatus.is_open ? 'bg-success shadow-[0_0_8px_#10b981]' : 'bg-text-muted'} ${marketStatus.is_open ? 'animate-pulse' : ''}`} />
+                    <span className={`text-xs font-bold ${marketStatus.is_open ? 'text-success' : 'text-text-muted'}`}>
+                        {marketStatus.message}
                     </span>
                 </div>
             </div>

@@ -1,4 +1,4 @@
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
 interface PerformanceData {
     date: string;
@@ -8,41 +8,49 @@ interface PerformanceData {
 
 interface PerformanceChartProps {
     data: PerformanceData[];
+    totalProfitPct?: number;
 }
 
-export function PerformanceChart({ data }: PerformanceChartProps) {
-    // 假設資料中的第一筆日期是基準 100%
-    const initialEquity = data.length > 0 ? data[0].equity : 1;
-    const initialBenchmark = data.length > 0 ? data[0].benchmark : 1;
+export function PerformanceChart({ data, totalProfitPct = 0 }: PerformanceChartProps) {
+    let normalizedData: any[] = [];
 
-    const normalizedData = data.map((d) => ({
-        ...d,
-        equityValue: d.equity,
-        benchmarkValue: d.benchmark,
-        // normalize to 1.0 = 100%
-        equityPct: d.equity / initialEquity,
-        benchmarkPct: d.benchmark / initialBenchmark,
-    }));
+    if (!data || data.length <= 1) {
+        // Render a flatline if there's no real curve yet
+        const today = new Date().toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' });
+        
+        normalizedData = [
+            { date: '起始', equityPct: 1, benchmarkPct: 1 },
+            { date: today, equityPct: 1, benchmarkPct: 1 }
+        ];
+    } else {
+        const initialEquity = data[0].equity || 1;
+        const initialBenchmark = data[0].benchmark || 1;
+
+        normalizedData = data.map((d) => ({
+            ...d,
+            // normalize to 1.0 = 100%, protect against division by zero
+            equityPct: initialEquity !== 0 ? d.equity / initialEquity : 1,
+            benchmarkPct: initialBenchmark !== 0 ? d.benchmark / initialBenchmark : 1,
+        }));
+    }
 
     return (
-        <div className="panel p-5 mt-4 min-h-[400px]">
+        <div className="w-full h-full flex flex-col">
             <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
                     <span className="text-brand-400">📈</span> 績效走勢
                 </h3>
-                <div className="text-xs bg-brand-500/20 text-brand-400 px-2 py-1 rounded-md">
-                    {data.length > 0 ? `+${((data[data.length - 1].equity / initialEquity - 1) * 100).toFixed(2)}%` : '+0%'}
+                <div className={`text-sm font-black px-3 py-1 rounded-full border ${
+                    totalProfitPct > 0 ? 'bg-danger/20 text-danger border-danger/20' : 
+                    totalProfitPct < 0 ? 'bg-success/20 text-success border-success/20' : 
+                    'bg-white/10 text-text-muted border-white/10'
+                }`}>
+                    {totalProfitPct > 0 ? '+' : ''}{totalProfitPct === 0 ? '0.00' : totalProfitPct.toFixed(2)}%
                 </div>
             </div>
             <div className="h-[320px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={normalizedData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                        <defs>
-                            <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
-                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                            </linearGradient>
-                        </defs>
+                    <LineChart data={normalizedData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
                         <XAxis
                             dataKey="date"
@@ -58,7 +66,7 @@ export function PerformanceChart({ data }: PerformanceChartProps) {
                             tickLine={false}
                             axisLine={false}
                             tickFormatter={(value) => `${(value * 100 - 100).toFixed(0)}%`}
-                            domain={['auto', 'auto']}
+                            domain={[(dataMin: number) => Math.min(dataMin, 0.95), (dataMax: number) => Math.max(dataMax, 1.05)]}
                         />
                         <Tooltip
                             contentStyle={{ backgroundColor: '#1a1e29', borderColor: '#ffffff20', color: '#fff' }}
@@ -71,24 +79,24 @@ export function PerformanceChart({ data }: PerformanceChartProps) {
                             labelStyle={{ color: '#9ca3af' }}
                         />
                         <Legend verticalAlign="top" height={36} iconType="circle" />
-                        <Area
+                        <Line
                             type="monotone"
                             dataKey="equityPct"
                             name="總資產"
                             stroke="#3b82f6"
                             strokeWidth={2}
-                            fillOpacity={1}
-                            fill="url(#colorEquity)"
+                            dot={false}
                         />
-                        <Area
+                        <Line
                             type="monotone"
                             dataKey="benchmarkPct"
                             name="0050 基準"
                             stroke="#f59e0b"
+                            strokeWidth={2}
                             strokeDasharray="5 5"
-                            fill="transparent"
+                            dot={false}
                         />
-                    </AreaChart>
+                    </LineChart>
                 </ResponsiveContainer>
             </div>
         </div>

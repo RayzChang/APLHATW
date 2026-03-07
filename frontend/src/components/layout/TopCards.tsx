@@ -17,6 +17,9 @@ export function TopCards({
 }: TopCardsProps) {
     const profit = totalAssets - initialAssets;
     const profitPercent = (profit / initialAssets) * 100;
+    const cashPct = (totalAssets && totalAssets > 0)
+        ? ((availableCash / totalAssets) * 100).toFixed(1) + '%'
+        : '－';
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -39,7 +42,7 @@ export function TopCards({
                     ${availableCash.toLocaleString()}
                 </p>
                 <p className="text-sm text-gray-500">
-                    佔總資產 {((availableCash / totalAssets) * 100).toFixed(1)}%
+                    佔總資產 {cashPct}
                 </p>
             </div>
 

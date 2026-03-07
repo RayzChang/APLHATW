@@ -1,56 +1,12 @@
-"""模擬交易 API"""
+"""
+模擬交易 API — 投資組合管理與自動循環
+"""
 
-from fastapi import APIRouter
-from pydantic import BaseModel
-
-from core.execution.simulation_engine import SimulationEngine
-from database.db_manager import DatabaseManager
-from config.settings import DEFAULT_WATCHLIST
+from fastapi import APIRouter, Request, BackgroundTasks
 
 router = APIRouter()
-db = DatabaseManager()
 
-
-class SimulationRequest(BaseModel):
-    symbols: list[str] | None = None
-    strategies: list[str] | None = None
-    days: int = 5
-    initial_balance: float | None = None  # 可自訂金額，如 50 萬、100 萬
-
-
-@router.post("/run")
-def run_simulation_api(req: SimulationRequest):
-    from config.settings import SIMULATION_INITIAL_BALANCE
-    amount = req.initial_balance or SIMULATION_INITIAL_BALANCE
-    engine = SimulationEngine(db)
-    result = engine.run_simulation(
-        symbols=req.symbols or DEFAULT_WATCHLIST[:30],
-        strategies=req.strategies,
-        days=req.days,
-        initial_balance=amount,
-    )
-    return result
-
-
-@router.get("/state")
-def get_simulation_state():
-    engine = SimulationEngine(db)
-    state = db.get_simulation_state()
-    open_trades = db.get_open_trades()
-    return {
-        "balance": engine.get_balance(),
-        "state": state,
-        "open_trades_count": len(open_trades),
-    }
-
-
-@router.get("/trades")
-def get_trades():
-    trades = db.get_open_trades()
-    return {"trades": trades}
-
-
-# 全域掃描狀態
+# 全域掃描狀態 (供 scheduler 更新，前端輪詢)
 scan_state = {
     "is_scanning": False,
     "current": 0,
@@ -58,46 +14,53 @@ scan_state = {
     "message": ""
 }
 
-@router.post("/scan")
-def trigger_manual_scan():
-    """手動觸發每日全市場掃描與自動交易"""
+@router.get("/portfolio")
+def get_portfolio_summary(request: Request):
+    """取得模擬投資組合資產概覽"""
+    simulator = request.app.state.simulator
+    return simulator.get_portfolio_summary()
+
+@router.post("/run_cycle")
+async def run_analysis_cycle(background_tasks: BackgroundTasks):
+    """
+    手動啟動一次全市場掃描與 AI 自動交易循環。
+    背景執行，不等待完成。
+    """
     from core.scheduler import job_daily_market_scan
-    import threading
     
     if scan_state["is_scanning"]:
-        return {"ok": False, "message": "全市場掃描已經在進行中，請稍後重試"}
+        return {"status": "error", "message": "全市場掃描已在進行中"}
         
-    # 在背景非同步執行以避免卡住 HTTP 請求
-    t = threading.Thread(target=job_daily_market_scan)
-    t.start()
-    return {"ok": True, "message": "已成功在背景啟動全市場掃描"}
+    background_tasks.add_task(job_daily_market_scan)
+    return {"status": "started", "message": "分析循環已啟動"}
+
+@router.post("/reset")
+def reset_simulation(request: Request):
+    """清空模擬交易紀錄、部位與資產，恢復初始狀態"""
+    simulator = request.app.state.simulator
+    simulator.reset()
+    return {"status": "ok", "message": "模擬帳戶已重置"}
+
+@router.get("/trades")
+def get_trade_history(request: Request):
+    """取得完整交易歷史紀錄列表"""
+    simulator = request.app.state.simulator
+    return simulator.trade_history
+
+@router.get("/positions")
+def get_current_positions(request: Request):
+    """取得當前持倉清單（含股數、均價等資訊）"""
+    simulator = request.app.state.simulator
+    # simulator.positions 是字典，轉換為列表方便前端呈現
+    results = []
+    for sid, data in simulator.positions.items():
+        results.append({
+            "stock_id": sid,
+            **data
+        })
+    return results
 
 @router.get("/scan/status")
 def get_scan_status():
-    """取得全市場掃描與 AI 分析的即時進度"""
+    """取得背景掃描的即時進度 (由 scheduler 更新)"""
     return scan_state
-
-
-@router.post("/reset")
-def reset_simulation():
-    """清空模擬交易資料庫與庫存，恢復初始資金"""
-    from core.db.database import SessionLocal, engine, Base
-    from core.db.models import Portfolio, Position, TradeHistory
-    from config.settings import SIMULATION_INITIAL_BALANCE
-    
-    session = SessionLocal()
-    try:
-        session.query(Position).delete()
-        session.query(TradeHistory).delete()
-        session.query(Portfolio).delete()
-        
-        portfolio = Portfolio(
-            total_assets=SIMULATION_INITIAL_BALANCE,
-            available_cash=SIMULATION_INITIAL_BALANCE
-        )
-        session.add(portfolio)
-        session.commit()
-    finally:
-        session.close()
-    
-    return {"ok": True, "message": "模擬庫存已清空，資金已重置"}

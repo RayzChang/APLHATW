@@ -1,7 +1,7 @@
-from typing import Dict, Any
-from core.agents.base_agent import BaseAgent
 import json
 from loguru import logger
+from core.agents.base_agent import BaseAgent
+from config.settings import AGENT_MODELS, AGENT_TEMPERATURES
 
 class TechnicalAnalystAgent(BaseAgent):
     """
@@ -18,10 +18,14 @@ class TechnicalAnalystAgent(BaseAgent):
     3. 結論與建議支撐/壓力位
     """
 
-    def __init__(self, temperature: float = 0.2):
+    def __init__(self, temperature: float = None, enable_search: bool = False):
+        model = AGENT_MODELS["technical"]
+        temp = temperature if temperature is not None else AGENT_TEMPERATURES["technical"]
         super().__init__(
+            model_name=model,
             system_instruction=self.SYSTEM_INSTRUCTION,
-            temperature=temperature
+            temperature=temp,
+            enable_search=enable_search
         )
 
     def analyze(self, symbol: str, name: str, current_price: float, technical_data: Dict[str, Any]) -> str:

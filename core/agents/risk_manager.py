@@ -1,7 +1,7 @@
-from typing import Dict, Any
-from core.agents.base_agent import BaseAgent
 import json
 from loguru import logger
+from core.agents.base_agent import BaseAgent
+from config.settings import AGENT_MODELS, AGENT_TEMPERATURES
 
 class RiskManagerAgent(BaseAgent):
     """
@@ -18,11 +18,14 @@ class RiskManagerAgent(BaseAgent):
     3. 最大建議倉位限制 (例如：建議不超過總資金的 5%)
     """
 
-    def __init__(self, temperature: float = 0.0):
-        # 風控需要非常嚴謹，temperature 設為 0.0
+    def __init__(self, temperature: float = None, enable_search: bool = False):
+        model = AGENT_MODELS["risk"]
+        temp = temperature if temperature is not None else AGENT_TEMPERATURES["risk"]
         super().__init__(
+            model_name=model,
             system_instruction=self.SYSTEM_INSTRUCTION,
-            temperature=temperature
+            temperature=temp,
+            enable_search=enable_search
         )
 
     def analyze(self, symbol: str, name: str, current_price: float, portfolio: Dict[str, Any]) -> str:

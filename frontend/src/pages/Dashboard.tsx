@@ -1,88 +1,73 @@
-import { Play, RefreshCw, Upload, Download, Bot, Loader2 } from 'lucide-react';
+import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
 import { PerformanceChart } from '../components/charts/PerformanceChart';
 import { useState, useEffect } from 'react';
-
-const MOCK_DATA = [
-    { date: '2023-11-01', equity: 1000000, benchmark: 100 },
-    { date: '2023-11-02', equity: 1005000, benchmark: 100.2 },
-    { date: '2023-11-03', equity: 1012000, benchmark: 101.5 },
-    { date: '2023-11-06', equity: 1008000, benchmark: 101.0 },
-    { date: '2023-11-07', equity: 1025000, benchmark: 102.1 },
-    { date: '2023-11-08', equity: 1032000, benchmark: 103.0 },
-];
-
-interface WatchlistItem {
-    symbol: string;
-    name: string;
-    close: number;
-    change_pct: number;
-    recommendation: string;
-    explanation: string[];
-}
-
-interface AgentDecision {
-    action: "BUY" | "SELL" | "HOLD";
-    confidence: number;
-    reasoning: string;
-    take_profit_price: number | null;
-    stop_loss_price: number | null;
-    position_size_pct: number;
-}
-
-interface AgentResult {
-    symbol: string;
-    name: string;
-    current_price: number;
-    decision: AgentDecision;
-}
+import api from '../api/axiosConfig';
 
 interface PortfolioSummary {
     total_assets: number;
-    available_cash: number;
+    cash: number;
     total_profit: number;
     total_profit_pct: number;
+    equity_curve?: Array<{
+        date: string;
+        equity: number;
+        benchmark: number;
+    }>;
 }
 
 interface PositionItem {
-    id: number;
-    symbol: string;
+    stock_id: string;
     name: string;
-    amount: number;
-    entry_price: number;
+    shares: number;
+    avg_cost: number;
     current_price: number;
     profit: number;
     profit_pct: number;
     stop_loss_price: number | null;
     take_profit_price: number | null;
+    status?: '保本啟動' | '追蹤止損中' | '正常';
+    break_even_price?: number;
+    hold_days?: number;
+}
+
+interface TradeRecord {
+    timestamp: string;
+    action: string;
+    stock_id: string;
+    stock_name?: string;
+    shares: number;
+    price: number;
+    total_value: number;
+    fee: number;
+    profit?: number;
+    profit_pct?: number;
 }
 
 export function Dashboard() {
-    const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-    const [watchlistProgress, setWatchlistProgress] = useState({ current: 0, total: 0 });
-    const [isLoadingWatchlist, setIsLoadingWatchlist] = useState(true);
-    
     // Portfolio States
     const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
     const [positions, setPositions] = useState<PositionItem[]>([]);
+    const [trades, setTrades] = useState<TradeRecord[]>([]);
     const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(true);
+    const [isTradesExpanded, setIsTradesExpanded] = useState(true);
 
-    // AI Agent States
-    const [isAgentAnalyzing, setIsAgentAnalyzing] = useState(false);
-    const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
+    const [watchlist] = useState([
+        { symbol: '2330', name: '台積電', price: 1040, change: 1.45, rsi: 62, volume: 34500 },
+        { symbol: '2317', name: '鴻海', price: 215, change: -0.23, rsi: 48, volume: 89000 },
+        { symbol: '2454', name: '聯發科', price: 1280, change: 0.50, rsi: 74, volume: 12000 },
+    ]);
 
     // Market Scan State
     const [scanState, setScanState] = useState({ is_scanning: false, current: 0, total: 0, message: '' });
 
     const checkScanStatus = async () => {
         try {
-            const res = await fetch('/api/simulation/scan/status');
-            if (res.ok) {
-                const data = await res.json();
-                setScanState(data);
-                return data.is_scanning;
-            }
-        } catch (e) {}
-        return false;
+            const res = await api.get('/api/simulation/scan/status');
+            setScanState(res.data);
+            return res.data.is_scanning;
+        } catch (e) {
+            return false;
+        }
     };
 
     useEffect(() => {
@@ -95,158 +80,80 @@ export function Dashboard() {
             interval = setInterval(async () => {
                 const isStillScanning = await checkScanStatus();
                 if (!isStillScanning) {
-                    fetchPortfolio();
+                    refreshAllData();
                 }
             }, 1000);
         }
         return () => clearInterval(interval);
     }, [scanState.is_scanning]);
 
-    const executeAgentAnalysis = async () => {
-        if (watchlist.length === 0) return;
-        setIsAgentAnalyzing(true);
-        try {
-            const targetSymbol = watchlist[0].symbol; // 針對清單第一檔進行深度分析
-            const authHeader = 'Basic ' + btoa('admin:changeme');
-            const res = await fetch('/api/analyze/agent', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': authHeader
-                },
-                body: JSON.stringify({ symbols: [targetSymbol] })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setAgentResult(data);
-            }
-        } catch (error) {
-            console.error('Failed to execute AI analysis:', error);
-        } finally {
-            setIsAgentAnalyzing(false);
-        }
-    };
 
     const handleScan = async () => {
         try {
-            const authHeader = 'Basic ' + btoa('admin:changeme');
-            const res = await fetch('/api/simulation/scan', { 
-                method: 'POST',
-                headers: { 'Authorization': authHeader }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.ok) {
-                    setScanState(prev => ({ ...prev, is_scanning: true, message: '準備啟動全市場掃描...' }));
-                } else {
-                    alert(data.message);
-                }
-            } else {
-                alert('啟動失敗，請確認後端是否正在運行中！');
+            const res = await api.post('/api/simulation/run_cycle');
+            if (res.status === 200 || res.status === 202) {
+                setScanState(prev => ({ ...prev, is_scanning: true, message: '準備啟動全市場掃描...' }));
             }
         } catch (e) {
-            console.error(e);
-            alert('無法連線到伺服器，請確保 python launcher.py 正在執行中！');
+            alert('啟動失敗，請確認後端是否正在運行中！');
         }
     };
 
     const handleReset = async () => {
-        if (!confirm('確定要重置所有庫存與虛擬資金嗎？此動作無法復原！')) return;
+        if (!confirm('確定要重置所有模擬交易紀錄嗎？此動作無法復原！')) return;
         try {
-            const authHeader = 'Basic ' + btoa('admin:changeme');
-            const res = await fetch('/api/simulation/reset', { 
-                method: 'POST',
-                headers: { 'Authorization': authHeader }
-            });
-            if (res.ok) {
+            const res = await api.post('/api/simulation/reset');
+            if (res.status === 200) {
                 alert('模擬交易庫存與資金已重置！');
-                fetchPortfolio();
-            } else {
-                alert('重置失敗！');
+                refreshAllData();
             }
         } catch (e) {
-            console.error(e);
-            alert('無法連線到伺服器，請確保 python launcher.py 正在執行中！');
+            alert('重置失敗！');
         }
     };
 
-
-    const fetchWatchlist = async () => {
-        setIsLoadingWatchlist(true);
-        setWatchlist([]);
-        setWatchlistProgress({ current: 0, total: 0 });
-        try {
-            const authHeader = 'Basic ' + btoa('admin:changeme');
-            
-            // 1. 取得清單代號
-            const listRes = await fetch('/api/watchlist', {
-                headers: { 'Authorization': authHeader }
-            });
-            if (!listRes.ok) return;
-            const listData = await listRes.json();
-            const symbols: string[] = listData.symbols || [];
-            
-            setWatchlistProgress({ current: 0, total: symbols.length });
-            
-            if (symbols.length === 0) {
-                setIsLoadingWatchlist(false);
-                return;
-            }
-            
-            // 2. 逐檔分析以更新進度條
-            const updatedResults: WatchlistItem[] = [];
-            for (let i = 0; i < symbols.length; i++) {
-                try {
-                    const res = await fetch('/api/analyze', {
-                        method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'Authorization': authHeader 
-                        },
-                        body: JSON.stringify({ symbols: [symbols[i]] })
-                    });
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.results && data.results.length > 0) {
-                            updatedResults.push(data.results[0]);
-                            setWatchlist([...updatedResults]); // 即時更新畫面
-                        }
-                    }
-                } catch (e) {
-                    console.error('分析失敗', symbols[i], e);
-                }
-                setWatchlistProgress({ current: i + 1, total: symbols.length });
-            }
-        } catch (error) {
-            console.error('Failed to fetch watchlist:', error);
-        } finally {
-            setIsLoadingWatchlist(false);
-        }
-    };
     
     const fetchPortfolio = async () => {
-        setIsLoadingPortfolio(true);
         try {
-            const authHeader = 'Basic ' + btoa('admin:changeme');
-            const headers = { 'Authorization': authHeader };
-            const summaryRes = await fetch('/api/portfolio/summary', { headers });
-            if (summaryRes.ok) setPortfolio(await summaryRes.json());
-            
-            const posRes = await fetch('/api/portfolio/positions', { headers });
-            if (posRes.ok) {
-                const data = await posRes.json();
-                setPositions(data.positions || []);
-            }
-        } catch(error) {
-            console.error('Failed to fetch portfolio', error);
-        } finally {
-            setIsLoadingPortfolio(false);
+            const res = await api.get('/api/simulation/portfolio');
+            setPortfolio(res.data);
+        } catch (error) {
+            console.error('Failed to fetch portfolio:', error);
         }
+    };
+
+    const fetchPositions = async () => {
+        try {
+            const res = await api.get('/api/simulation/positions');
+            setPositions(res.data || []);
+        } catch (error) {
+            console.error('Failed to fetch positions:', error);
+        }
+    };
+
+    const fetchTrades = async () => {
+        try {
+            const res = await api.get('/api/simulation/trades');
+            setTrades(res.data || []);
+        } catch (error) {
+            console.error('Failed to fetch trades:', error);
+        }
+    };
+
+    const refreshAllData = async () => {
+        setIsLoadingPortfolio(true);
+        await Promise.all([
+            fetchPortfolio(),
+            fetchPositions(),
+            fetchTrades()
+        ]);
+        setIsLoadingPortfolio(false);
     };
 
     useEffect(() => {
-        fetchWatchlist();
-        fetchPortfolio();
+        refreshAllData();
+        const interval = setInterval(refreshAllData, 30000); // Poll every 30s
+        return () => clearInterval(interval);
     }, []);
 
     // 格式化金錢
@@ -254,77 +161,78 @@ export function Dashboard() {
         return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(val);
     };
 
+    const cashPct = (portfolio?.total_assets && portfolio.total_assets > 0)
+        ? ((portfolio.cash / portfolio.total_assets) * 100).toFixed(1) + '%'
+        : '－';
+
     return (
-        <div className="max-w-[1600px] mx-auto p-6">
+        <div className="max-w-[1400px] mx-auto px-6 py-6 md:py-8 space-y-6 animate-in fade-in duration-700 pb-12">
 
-            {/* Top Stats Row */}
-            <div className="grid grid-cols-4 gap-4">
-                <div className="panel p-5 border-l-4 border-brand-500">
-                    <h3 className="text-gray-400 text-sm font-medium mb-1">虛擬總資產</h3>
-                    <div className="text-2xl font-bold text-white mb-2">
-                        {isLoadingPortfolio ? '...' : formatMoney(portfolio?.total_assets || 0)}
+            {/* SECTION 1: Top Stats Cards */}
+            <div className="panel bg-[#1a2035] flex flex-col md:flex-row items-stretch divide-y md:divide-y-0 md:divide-x divide-white/10">
+                <div className="flex-1 p-4 flex items-center gap-4">
+                    <div className="w-1.5 h-10 rounded-full bg-brand-primary"></div>
+                    <div>
+                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">💰 虛擬總資產</div>
+                        <div className="text-2xl font-black text-white font-mono tracking-tighter">
+                            {isLoadingPortfolio ? '---' : formatMoney(portfolio?.total_assets || 1000000)}
+                        </div>
                     </div>
                 </div>
-                
-                <div className="panel p-5">
-                    <h3 className="text-gray-400 text-sm font-medium mb-1">可用現金</h3>
-                    <div className="text-2xl font-bold text-white mb-2">
-                        {isLoadingPortfolio ? '...' : formatMoney(portfolio?.available_cash || 0)}
-                    </div>
-                </div>
-                
-                <div className="panel p-5">
-                    <h3 className="text-gray-400 text-sm font-medium mb-1">累積總獲利</h3>
-                    <div className={`text-2xl font-bold mb-2 ${portfolio && portfolio.total_profit >= 0 ? 'text-success' : 'text-danger'}`}>
-                        {isLoadingPortfolio ? '...' : `${portfolio && portfolio.total_profit > 0 ? '+' : ''}${formatMoney(portfolio?.total_profit || 0)}`}
-                    </div>
-                </div>
-                
-                <div className="panel p-5">
-                    <h3 className="text-gray-400 text-sm font-medium mb-1">總報酬率</h3>
-                    <div className={`text-2xl font-bold mb-2 ${portfolio && portfolio.total_profit_pct >= 0 ? 'text-success' : 'text-danger'}`}>
-                        {isLoadingPortfolio ? '...' : `${portfolio && portfolio.total_profit_pct > 0 ? '+' : ''}${portfolio?.total_profit_pct.toFixed(2) || 0}%`}
-                    </div>
-                </div>
-            </div>            {/* Top Cards Indicator */}
-            {/* <TopCards
-                totalAssets={1032000}
-                availableCash={820000}
-                holdingValue={212000}
-                totalTrades={12}
-                winRate={66.7}
-                initialAssets={1000000}
-            /> */}
 
-            {/* Action Bar */}
-            <div className="panel p-4 mb-6 flex items-center justify-between">
-                <div className="flex gap-3">
-                    <button 
-                        onClick={executeAgentAnalysis}
-                        disabled={isAgentAnalyzing || watchlist.length === 0}
-                        className="btn btn-primary bg-indigo-600 hover:bg-indigo-500 gap-2 disabled:opacity-50"
-                    >
-                        {isAgentAnalyzing ? (
-                            <><Loader2 className="w-4 h-4 animate-spin" /> 正在進行深度分析...</>
-                        ) : (
-                            <><Bot className="w-4 h-4" /> 執行 AI 交易分析</>
-                        )}
+                <div className="flex-1 p-4 flex items-center gap-4">
+                    <div className="w-1.5 h-10 rounded-full bg-text-muted"></div>
+                    <div>
+                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">💵 可用現金</div>
+                        <div className="text-2xl font-black text-white font-mono tracking-tighter">
+                            {isLoadingPortfolio ? '---' : formatMoney(portfolio?.cash || 0)}
+                        </div>
+                        <div className="text-[10px] text-text-muted mt-0.5">
+                            佔總資產 {cashPct}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex-1 p-4 flex items-center gap-4">
+                    <div className="w-1.5 h-10 rounded-full bg-success"></div>
+                    <div>
+                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">📈 累積總獲利</div>
+                        <div className={`text-2xl font-black font-mono tracking-tighter ${(portfolio?.total_profit || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
+                            {(portfolio?.total_profit || 0) > 0 ? '+' : ''}{formatMoney(portfolio?.total_profit || 0)}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex-1 p-4 flex items-center gap-4">
+                    <div className="w-1.5 h-10 rounded-full bg-brand-primary"></div>
+                    <div>
+                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">🎯 綜合報酬率</div>
+                        <div className={`text-2xl font-black font-mono tracking-tighter ${(portfolio?.total_profit_pct || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
+                            {(portfolio?.total_profit_pct || 0).toFixed(2)}%
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* SECTION 2: Action Bar */}
+            <div className="panel p-3 px-5 flex flex-wrap items-center justify-between gap-4 border-brand-primary/20 bg-brand-primary/5">
+                <div className="flex flex-wrap items-center gap-4">
+                    <button onClick={refreshAllData} className="btn btn-secondary gap-2 px-4 py-2 text-sm">
+                        <RefreshCw className={`w-4 h-4 ${isLoadingPortfolio ? 'animate-spin' : ''}`} /> 刷新數據
                     </button>
-                    <button onClick={() => { fetchWatchlist(); fetchPortfolio(); }} className="btn btn-secondary border border-white/10 gap-2">
-                        <RefreshCw className="w-4 h-4" /> 更新報價
-                    </button>
+                    
                     {scanState.is_scanning ? (
-                        <div className="flex items-center gap-3 bg-brand-900/30 px-3 py-1.5 rounded-lg border border-brand-500/30 min-w-[200px]">
-                            <Loader2 className="w-4 h-4 text-brand-400 animate-spin shrink-0" />
+                        <div className="flex items-center gap-3 bg-black/40 px-4 py-2 rounded-xl border border-brand-primary/30 min-w-[350px]">
+                            <Loader2 className="w-4 h-4 text-brand-primary animate-spin shrink-0" />
                             <div className="flex flex-col w-full">
-                                <div className="flex justify-between text-xs text-brand-300 mb-1">
-                                    <span className="truncate max-w-[150px]">{scanState.message}</span>
-                                    <span>{scanState.total > 0 ? `${Math.round((scanState.current / scanState.total) * 100)}%` : ''}</span>
+                                <div className="flex justify-between text-xs mb-1">
+                                    <span className="text-brand-primary font-bold">{scanState.message}</span>
+                                    <span className="text-text-muted">{scanState.total > 0 ? `${Math.round((scanState.current / scanState.total) * 100)}%` : ''}</span>
                                 </div>
                                 {scanState.total > 0 && (
-                                    <div className="h-1 bg-black/50 rounded-full overflow-hidden w-full">
+                                    <div className="h-1 flex-1 bg-white/10 rounded-full overflow-hidden w-full">
                                         <div 
-                                            className="h-full bg-brand-500 rounded-full transition-all duration-300"
+                                            className="h-full bg-brand-primary rounded-full transition-all duration-500 shadow-[0_0_10px_#6366f1]"
                                             style={{ width: `${(scanState.current / scanState.total) * 100}%` }}
                                         ></div>
                                     </div>
@@ -332,247 +240,284 @@ export function Dashboard() {
                             </div>
                         </div>
                     ) : (
-                        <button onClick={handleScan} className="btn bg-brand-600/20 text-brand-400 hover:bg-brand-600/30 gap-2 shrink-0">
-                            <Play className="w-4 h-4 fill-current" /> 手動觸發全市場掃描
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button 
+                                onClick={handleScan}
+                                className="btn btn-primary glow-purple gap-2 px-6 py-2 bg-gradient-to-r from-brand-primary to-indigo-600 hover:scale-105 text-sm"
+                            >
+                                <Bot className="w-4 h-4" /> 執行 AI 交易分析 (全市場)
+                            </button>
+                            <span className="text-xs text-text-muted whitespace-nowrap hidden md:inline-block">
+                                AI將自動掃描全市場2,000+支股票，篩選最佳買賣時機
+                            </span>
+                        </div>
                     )}
                 </div>
 
-                <div className="flex gap-3">
-                    <button onClick={() => alert('尚未實作：匯出功能')} className="btn btn-secondary text-gray-400 hover:text-white gap-2">
-                        <Download className="w-4 h-4" /> 匯出
-                    </button>
-                    <button onClick={() => alert('尚未實作：匯入功能')} className="btn btn-secondary text-gray-400 hover:text-white gap-2">
-                        <Upload className="w-4 h-4 text-warning" /> 匯入
-                    </button>
-                    <button onClick={handleReset} className="btn bg-cyan-900/40 text-cyan-400 hover:bg-cyan-900/60 gap-2">
-                        <RefreshCw className="w-4 h-4" /> 重置模擬
-                    </button>
+                <button onClick={handleReset} className="btn btn-danger gap-2 px-4 py-2 text-sm">
+                    <RefreshCw className="w-4 h-4" /> 重置模擬
+                </button>
+            </div>
+
+            {/* SECTION 3: Split View 6:4 */}
+            <div className="flex flex-col lg:flex-row gap-6 items-stretch">
+                {/* Left: Performance Chart */}
+                <div className="w-full lg:w-[60%] panel p-6 h-[320px] flex flex-col">
+                    <div className="flex-1 w-full h-full relative">
+                        {!isLoadingPortfolio ? (
+                            <PerformanceChart 
+                                data={portfolio?.equity_curve || []} 
+                                totalProfitPct={portfolio?.total_profit_pct || 0}
+                            />
+                        ) : (
+                            <div className="h-full flex flex-col items-center justify-center text-text-muted gap-3">
+                                 <Loader2 className="w-10 h-10 animate-spin text-brand-primary" />
+                                 <span className="font-bold tracking-widest text-xs uppercase">分析引擎啟動中...</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Right: AI Logs & Watchlist */}
+                <div className="w-full lg:flex-1 flex flex-col gap-4">
+                    {/* Top Right: AI Logs */}
+                    <div className="panel p-4 flex-1 flex flex-col min-h-0">
+                        <div className="flex justify-between items-center mb-3">
+                            <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
+                                <Bot className="w-4 h-4 text-brand-primary" /> AI 決策日誌
+                            </h3>
+                            <span className="bg-brand-primary text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
+                                {trades.length}
+                            </span>
+                        </div>
+                        <div className="flex-1 overflow-y-auto pr-1 space-y-2">
+                            {trades.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center py-4 text-text-muted">
+                                    <Bot className="w-8 h-8 opacity-20 mb-2" />
+                                    <span className="text-sm font-bold">等待AI執行分析...</span>
+                                    <span className="text-[10px] opacity-70">點擊執行AI交易分析開始</span>
+                                </div>
+                            ) : (
+                                trades.slice().reverse().slice(0, 20).map((t, i) => (
+                                    <div key={i} className="flex gap-3 p-2.5 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                                        <div className="flex flex-col items-center shrink-0">
+                                            <span className="text-[10px] font-mono text-text-muted">{new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                            <div className={`w-1 h-full mt-1 rounded-full ${
+                                                t.action === 'BUY' ? 'bg-success' : t.action === 'SELL' ? 'bg-danger' : 'bg-gray-500'
+                                            }`}></div>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between mb-0.5">
+                                                <span className="text-sm font-black text-text-main">{t.stock_id}</span>
+                                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                                                    t.action === 'BUY' ? 'bg-success/20 text-success' : 
+                                                    t.action === 'SELL' ? 'bg-danger/20 text-danger' : 'bg-white/10 text-text-muted'
+                                                }`}>
+                                                    {t.action}
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-text-muted truncate">
+                                                執行{t.action === 'BUY' ? '買入' : '賣出'} {t.shares} 股，成交價 {t.price.toFixed(2)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Bottom Right: Watchlist & RSI */}
+                    <div className="panel p-4 flex-1 flex flex-col min-h-0">
+                        <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 mb-3">
+                            <TrendingUp className="w-4 h-4 text-brand-primary" /> 觀察清單 & 技術指標
+                        </h3>
+                        <div className="flex-1 overflow-y-auto pr-1 space-y-2">
+                            {watchlist.map((item, i) => (
+                                <div key={i} className="flex items-center justify-between p-2 hover:bg-white/5 rounded-lg transition-colors">
+                                    <div className="flex flex-col w-[25%] shrink-0">
+                                        <span className="text-xs font-black text-text-main">{item.symbol}</span>
+                                        <span className="text-[10px] text-text-muted truncate">{item.name}</span>
+                                    </div>
+                                    <div className="text-right flex flex-col w-[25%] shrink-0">
+                                        <span className="text-xs font-mono font-bold">{item.price.toLocaleString()}</span>
+                                        <span className={`text-[10px] font-mono font-bold ${item.change >= 0 ? 'text-danger' : 'text-success'}`}>
+                                            {item.change >= 0 ? '+' : ''}{item.change}%
+                                        </span>
+                                    </div>
+                                    <div className="text-right flex flex-col w-[25%] shrink-0 pr-2">
+                                        <span className="text-xs font-mono font-bold">{(item.volume || 0).toLocaleString()}</span>
+                                        <span className="text-[10px] text-text-muted">張</span>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1 w-[25%] shrink-0">
+                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded leading-none ${
+                                            (item.rsi || 50) > 70 ? 'bg-danger/20 text-danger' : 
+                                            (item.rsi || 50) < 30 ? 'bg-success/20 text-success' : 'bg-white/10 text-text-muted'
+                                        }`}>
+                                            {(item.rsi || 50) > 70 ? '超買' : (item.rsi || 50) < 30 ? '超賣' : '正常'}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                {/* Left Column (Chart + Positions) */}
-                <div className="lg:col-span-2 space-y-6">
-                    <PerformanceChart data={MOCK_DATA} />
-
-                    <div className="panel p-5">
-                        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                            <span>📦</span> 現在庫存明細
-                        </h3>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left text-sm">
-                                <thead>
-                                    <tr className="border-b border-white/5 text-gray-400">
-                                        <th className="pb-3 font-medium">標的</th>
-                                        <th className="pb-3 font-medium text-right">持有股數</th>
-                                        <th className="pb-3 font-medium text-right">均價</th>
-                                        <th className="pb-3 font-medium text-right">現價</th>
-                                        <th className="pb-3 font-medium text-right">防護網</th>
-                                        <th className="pb-3 font-medium text-right">未實現損益</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {isLoadingPortfolio ? (
-                                        <tr><td colSpan={6} className="text-center py-4 text-gray-500">載入中...</td></tr>
-                                    ) : positions.length === 0 ? (
-                                        <tr><td colSpan={6} className="text-center py-4 text-gray-500">目前無任何庫存</td></tr>
-                                    ) : (
-                                        positions.map(p => (
-                                            <tr key={p.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                                                <td className="py-3">
-                                                    <div className="font-bold text-white">{p.symbol}</div>
-                                                    <div className="text-xs text-gray-500">{p.name}</div>
-                                                </td>
-                                                <td className="py-3 text-right font-mono text-gray-300">{p.amount}</td>
-                                                <td className="py-3 text-right font-mono text-gray-300">{p.entry_price.toFixed(2)}</td>
-                                                <td className="py-3 text-right font-mono text-gray-300">{p.current_price.toFixed(2)}</td>
-                                                <td className="py-3 text-right">
-                                                    <div className="text-xs text-danger font-mono">SL: {p.stop_loss_price || '-'}</div>
-                                                    <div className="text-xs text-success font-mono">TP: {p.take_profit_price || '-'}</div>
-                                                </td>
-                                                <td className={`py-3 text-right font-mono font-bold ${p.profit >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                    <div>{p.profit > 0 ? '+' : ''}{formatMoney(p.profit)}</div>
-                                                    <div className="text-xs">{p.profit_pct > 0 ? '+' : ''}{p.profit_pct.toFixed(2)}%</div>
-                                                </td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div className="panel p-5">
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-4">
-                            <span className="text-gray-400">📋</span> 歷史交易紀錄
-                        </h3>
-                        <div className="text-center py-8 text-gray-500 bg-black/20 rounded-lg border border-dashed border-white/10">
-                            暫無交易紀錄
-                        </div>
-                    </div>
+            {/* SECTION 4: Positions Table */}
+            <div className="panel overflow-hidden">
+                <div className="p-6 border-b border-card-border flex justify-between items-center">
+                    <h3 className="text-lg font-black tracking-tight flex items-center gap-2">
+                        <span className="bg-brand-primary w-1 h-5 rounded-full inline-block"></span>
+                        當前持倉庫存
+                    </h3>
                 </div>
-
-                {/* Right Column (Watchlist / AI Logs) */}
-                <div className="space-y-6">
-                    <div className="panel p-5">
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2 justify-between mb-4">
-                            <div className="flex items-center gap-2">
-                                <span className="text-cyan-400">📊</span> 觀察清單 · 技術指標
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <button 
-                                    onClick={fetchWatchlist}
-                                    className="p-1 hover:bg-white/10 rounded transition-colors text-gray-400 hover:text-white"
-                                    disabled={isLoadingWatchlist}
-                                >
-                                    <RefreshCw className={`w-4 h-4 ${isLoadingWatchlist ? 'animate-spin' : ''}`} />
-                                </button>
-                                <span className="bg-white/10 text-xs px-2 py-0.5 rounded-full">{watchlist.length}</span>
-                            </div>
-                        </h3>
-
-                        <div className="space-y-3 min-h-[150px]">
-                            {isLoadingWatchlist && watchlistProgress.total > 0 && (
-                                <div className="mb-4">
-                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                        <span>正在讀取台股資料... ({watchlistProgress.current}/{watchlistProgress.total})</span>
-                                        <span>{Math.round((watchlistProgress.current / watchlistProgress.total) * 100) || 0}%</span>
-                                    </div>
-                                    <div className="h-1.5 bg-black/50 rounded-full overflow-hidden">
-                                        <div 
-                                            className="h-full bg-cyan-500 rounded-full transition-all duration-300"
-                                            style={{ width: `${(watchlistProgress.current / watchlistProgress.total) * 100}%` }}
-                                        ></div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {isLoadingWatchlist && watchlistProgress.total === 0 ? (
-                                <div className="flex flex-col items-center justify-center h-full text-gray-400 py-8">
-                                    <Loader2 className="w-8 h-8 animate-spin mb-2 text-brand-500" />
-                                    <span className="text-sm">正在取得自選清單...</span>
-                                </div>
-                            ) : watchlist.length === 0 && !isLoadingWatchlist ? (
-                                <div className="text-center text-gray-500 py-8">
-                                    清單為空
-                                </div>
+                <div className="overflow-x-auto w-full">
+                    <table className="w-full text-left table-fixed min-w-[1000px]">
+                        <thead>
+                            <tr className="bg-white/5 text-[10px] font-bold text-text-muted uppercase tracking-widest">
+                                <th className="px-4 py-3 w-[12%]">標的</th>
+                                <th className="px-4 py-3 w-[8%] text-right">持有股數</th>
+                                <th className="px-4 py-3 w-[8%] text-right">均價</th>
+                                <th className="px-4 py-3 w-[8%] text-right">現價</th>
+                                <th className="px-4 py-3 w-[10%] text-right">防護網(止損)</th>
+                                <th className="px-4 py-3 w-[9%] text-right">止盈價</th>
+                                <th className="px-4 py-3 w-[9%] text-right">保本價</th>
+                                <th className="px-4 py-3 w-[10%] text-right">未實現損益</th>
+                                <th className="px-4 py-3 w-[8%] text-right">損益%</th>
+                                <th className="px-4 py-3 w-[8%] text-right">持倉天數</th>
+                                <th className="px-4 py-3 w-[10%] text-center">狀態</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                            {isLoadingPortfolio ? (
+                                <tr><td colSpan={11} className="text-center py-6 text-text-muted italic"><Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" /> 帳戶數據對接中...</td></tr>
+                            ) : positions.length === 0 ? (
+                                <tr>
+                                    <td colSpan={11} className="text-center py-6 text-text-muted text-sm border-0">
+                                        <div className="flex items-center justify-center gap-2 opacity-50">
+                                            <Bot className="w-4 h-4" />
+                                            <span className="font-bold tracking-widest uppercase">目前無任何倉位，等待 AI 建立部位</span>
+                                        </div>
+                                    </td>
+                                </tr>
                             ) : (
-                                watchlist.map((item) => {
-                                    const isUp = item.change_pct > 0;
-                                    const isDown = item.change_pct < 0;
-                                    
-                                    let dotColor = 'bg-gray-500';
-                                    if (item.recommendation.includes('買')) dotColor = 'bg-success';
-                                    else if (item.recommendation.includes('賣')) dotColor = 'bg-danger';
-
-                                    return (
-                                        <div key={item.symbol} className="p-3 bg-black/20 border border-white/5 rounded-lg hover:border-white/10 transition-colors cursor-pointer group">
-                                            <div className="flex justify-between items-center mb-2">
-                                                <span className="font-bold text-white group-hover:text-brand-400 transition-colors">
-                                                    {item.name} ({item.symbol})
-                                                </span>
-                                                <div className="text-right">
-                                                    <span className={`block font-mono ${isUp ? 'text-success' : isDown ? 'text-danger' : 'text-white'}`}>
-                                                        {item.close.toLocaleString()}
-                                                    </span>
-                                                    <span className={`text-xs ${isUp ? 'text-success' : isDown ? 'text-danger' : 'text-gray-400'}`}>
-                                                        {isUp ? '+' : ''}{item.change_pct.toFixed(2)}%
-                                                    </span>
-                                                </div>
+                                positions.map((p, idx) => (
+                                    <tr key={`${p.stock_id}-${idx}`} className="hover:bg-brand-primary/5 transition-colors group">
+                                        <td className="px-4 py-4">
+                                            <div className="font-black text-text-main group-hover:text-brand-primary transition-colors text-sm">{p.stock_id}</div>
+                                            <div className="text-[10px] text-text-muted font-bold truncate">{p.name || '台股標的'}</div>
+                                        </td>
+                                        <td className="px-4 py-4 text-right font-mono text-sm font-bold">{(p.shares || 0).toLocaleString()}</td>
+                                        <td className="px-4 py-4 text-right font-mono text-sm">{(p.avg_cost || 0).toFixed(2)}</td>
+                                        <td className="px-4 py-4 text-right font-mono text-sm font-black text-text-main">{(p.current_price || 0).toFixed(2)}</td>
+                                        <td className="px-4 py-4 text-right font-mono text-xs text-danger font-bold">{p.stop_loss_price?.toFixed(2) || '---'}</td>
+                                        <td className="px-4 py-4 text-right font-mono text-xs text-brand-primary font-bold">{p.take_profit_price?.toFixed(2) || '---'}</td>
+                                        <td className="px-4 py-4 text-right font-mono text-xs font-bold text-text-muted">{p.break_even_price?.toFixed(2) || '---'}</td>
+                                        <td className="px-4 py-4 text-right font-mono">
+                                            <div className={`text-sm font-black ${(p.profit || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
+                                                {(p.profit || 0) > 0 ? '+' : ''}{formatMoney(p.profit || 0)}
                                             </div>
-                                            <div className="text-xs text-gray-400 space-y-1">
-                                                <p className="flex items-start gap-2">
-                                                    <span className={`w-2 h-2 rounded-full mt-1 shrink-0 ${dotColor}`}></span>
-                                                    <span className="line-clamp-2 leading-relaxed">
-                                                        {item.recommendation}：{item.explanation.slice(0, 2).join(' · ')}
-                                                    </span>
-                                                </p>
-                                            </div>
-                                        </div>
-                                    );
-                                })
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="panel p-5 flex-1 min-h-[400px] flex flex-col">
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2 justify-between mb-4">
-                            <div className="flex items-center gap-2">
-                                <span className="text-fuchsia-400">🧠</span> AI 決策日誌
-                            </div>
-                            <span className="bg-brand-600/20 text-brand-400 text-xs px-2 py-0.5 rounded-full">BETA</span>
-                        </h3>
-
-                        <div className="flex-1 rounded-lg border border-white/5 bg-black/40 p-4 flex flex-col">
-                            {isAgentAnalyzing ? (
-                                <div className="flex-1 flex flex-col items-center justify-center text-center h-full space-y-4">
-                                    <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center relative">
-                                        <div className="absolute inset-0 rounded-full border-t-2 border-indigo-500 animate-spin"></div>
-                                        <Bot className="w-8 h-8 text-indigo-400 animate-pulse" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <p className="text-white font-medium">四位專家正在激辯中...</p>
-                                        <p className="text-sm text-indigo-400">正在分析技術指標、新聞情緒與帳戶風險</p>
-                                    </div>
-                                </div>
-                            ) : agentResult ? (
-                                <div className="space-y-4">
-                                    <div className="flex justify-between items-center border-b border-white/5 pb-3">
-                                        <div>
-                                            <span className="text-sm text-gray-400">分析標的</span>
-                                            <div className="text-lg font-bold text-white">{agentResult.name} ({agentResult.symbol})</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <span className="text-sm text-gray-400">最終決策</span>
-                                            <div className={`text-xl font-black ${
-                                                agentResult.decision.action === 'BUY' ? 'text-success' : 
-                                                agentResult.decision.action === 'SELL' ? 'text-danger' : 'text-warning'
+                                        </td>
+                                        <td className="px-4 py-4 text-right font-mono text-sm font-bold">
+                                            <span className={`${(p.profit_pct || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
+                                                {(p.profit_pct || 0) > 0 ? '+' : ''}{(p.profit_pct || 0).toFixed(2)}%
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-4 text-right font-mono text-xs text-text-muted">{p.hold_days !== undefined ? `${p.hold_days}天` : '---'}</td>
+                                        <td className="px-4 py-4 text-center">
+                                            <span className={`inline-block px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest leading-none ${
+                                                p.profit_pct > 2 ? 'bg-brand-primary/20 text-brand-primary' :
+                                                p.profit_pct < -2 ? 'bg-danger/20 text-danger' : 'bg-white/10 text-text-muted'
                                             }`}>
-                                                {agentResult.decision.action === 'BUY' ? '建議買進' : 
-                                                 agentResult.decision.action === 'SELL' ? '建議賣出' : '持續觀望'}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="bg-white/5 rounded p-3 text-sm">
-                                        <span className="text-fuchsia-400 mb-1 block font-bold">💡 首席觀點 & 核心邏輯</span>
-                                        <p className="text-gray-300 leading-relaxed">{agentResult.decision.reasoning}</p>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-3 mt-4">
-                                        <div className="bg-black/30 border border-white/5 rounded p-3">
-                                            <div className="text-xs text-gray-500 mb-1">信心水準</div>
-                                            <div className="text-white font-mono text-lg">{(agentResult.decision.confidence * 100).toFixed(0)}%</div>
-                                        </div>
-                                        <div className="bg-black/30 border border-white/5 rounded p-3">
-                                            <div className="text-xs text-gray-500 mb-1">建議資金配置</div>
-                                            <div className="text-white font-mono text-lg">{agentResult.decision.position_size_pct}%</div>
-                                        </div>
-                                        <div className="bg-black/30 border border-white/5 rounded p-3">
-                                            <div className="text-xs text-gray-500 mb-1">停利目標價</div>
-                                            <div className="text-success font-mono text-lg">{agentResult.decision.take_profit_price || '-'}</div>
-                                        </div>
-                                        <div className="bg-black/30 border border-white/5 rounded p-3">
-                                            <div className="text-xs text-gray-500 mb-1">建議停損價</div>
-                                            <div className="text-danger font-mono text-lg">{agentResult.decision.stop_loss_price || '-'}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="flex-1 flex flex-col items-center justify-center text-center h-full">
-                                    <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mb-4">
-                                        <Bot className="w-8 h-8 text-indigo-400" />
-                                    </div>
-                                    <p className="text-white font-medium mb-1">點擊「執行 AI 交易分析」開始</p>
-                                    <p className="text-sm text-gray-500 max-w-[200px]">AI 將啟動 4 位專家進行深度分析</p>
-                                </div>
+                                                {p.status || (p.profit_pct > 5 ? '追蹤止損中' : p.profit_pct > 2 ? '保本啟動' : '正常')}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))
                             )}
-                        </div>
-                    </div>
+                        </tbody>
+                    </table>
                 </div>
+            </div>
 
+            {/* SECTION 5: Trade History Collapsible */}
+            <div className="panel overflow-hidden mb-6">
+                <button 
+                    onClick={() => setIsTradesExpanded(!isTradesExpanded)}
+                    className="w-full p-6 flex justify-between items-center hover:bg-white/5 transition-colors"
+                >
+                    <h3 className="text-lg font-black tracking-tight flex items-center gap-2">
+                        <span className="bg-text-muted w-1 h-5 rounded-full inline-block"></span>
+                        歷史交易紀錄
+                    </h3>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs text-text-muted font-bold">近期 {trades.length} 筆</span>
+                        {isTradesExpanded ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
+                    </div>
+                </button>
+                
+                {isTradesExpanded && (
+                    <div className="overflow-x-auto w-full border-t border-card-border animate-in slide-in-from-top duration-300">
+                        <table className="w-full text-left table-fixed min-w-[1000px]">
+                            <thead>
+                                <tr className="bg-white/5 text-[10px] font-bold text-text-muted uppercase tracking-widest">
+                                    <th className="px-4 py-3 w-[8%]">時間</th>
+                                    <th className="px-4 py-3 w-[8%] text-center">操作</th>
+                                    <th className="px-4 py-3 w-[10%]">股票代碼</th>
+                                    <th className="px-4 py-3 w-[12%]">股票名稱</th>
+                                    <th className="px-4 py-3 w-[10%] text-right">股數</th>
+                                    <th className="px-4 py-3 w-[10%] text-right">成交價</th>
+                                    <th className="px-4 py-3 w-[12%] text-right">總額</th>
+                                    <th className="px-4 py-3 w-[10%] text-right">手續費</th>
+                                    <th className="px-4 py-3 w-[10%] text-right">損益</th>
+                                    <th className="px-4 py-3 w-[10%] text-right">損益%</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-white/5">
+                                {trades.length === 0 ? (
+                                    <tr><td colSpan={10} className="text-center py-0 h-[80px] text-text-muted italic text-sm border-0">暫無交易紀錄</td></tr>
+                                ) : (
+                                    trades.slice().reverse().map((t, i) => (
+                                        <tr key={i} className={`group hover:bg-white/5 transition-colors border-l-4 ${
+                                            t.action === 'BUY' ? 'border-l-success' : 'border-l-danger'
+                                        }`}>
+                                            <td className="px-4 py-3 text-xs text-text-muted font-mono">
+                                                {t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--'}
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest ${
+                                                    t.action === 'BUY' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger'
+                                                }`}>
+                                                    {t.action === 'BUY' ? '買入' : '賣出'}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 font-black text-text-main text-sm">{t.stock_id}</td>
+                                            <td className="px-4 py-3 text-[10px] text-text-muted truncate">{t.stock_name || '台股標的'}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-sm">{(t.shares || 0).toLocaleString()}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-sm font-bold">{(t.price || 0).toFixed(2)}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-sm font-black text-text-main">{formatMoney(t.total_value || 0)}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-[10px] text-text-muted">{formatMoney(t.fee || 0)}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-sm font-bold">
+                                                {t.profit !== undefined ? (
+                                                    <span className={t.profit >= 0 ? 'text-danger' : 'text-success'}>
+                                                        {t.profit > 0 ? '+' : ''}{formatMoney(t.profit)}
+                                                    </span>
+                                                ) : '---'}
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono text-sm font-bold">
+                                                {t.profit_pct !== undefined ? (
+                                                    <span className={t.profit_pct >= 0 ? 'text-danger' : 'text-success'}>
+                                                        {t.profit_pct > 0 ? '+' : ''}{(t.profit_pct).toFixed(2)}%
+                                                    </span>
+                                                ) : '---'}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         </div>
     );
