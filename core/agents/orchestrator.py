@@ -12,19 +12,20 @@ from core.risk.sl_tp_calculator import SLTPCalculator
 class TradingOrchestrator:
     """
     交易編排器，負責協調各個 Agent 與資料抓取器，執行完整的股票分析流程。
+    傳入 fetcher 可共用 app 層級的 TWDataFetcher，避免重複 FinMind 登入。
     """
 
-    def __init__(self):
+    def __init__(self, fetcher: TWDataFetcher | None = None):
         logger.info("Initializing TradingOrchestrator...")
-        
-        # 初始化各個 Agent，現在預設會從 settings.py 讀取模型與溫度
+
+        # 初始化各個 Agent，從 settings.py 讀取模型與溫度
         self.technical_agent = TechnicalAnalystAgent()
         self.sentiment_agent = SentimentAnalystAgent(enable_search=True)
         self.risk_agent = RiskManagerAgent()
         self.chief_agent = ChiefDecisionMakerAgent()
-        
-        # 初始化工具
-        self.fetcher = TWDataFetcher()
+
+        # 共用外部傳入的 fetcher，若無則自建
+        self.fetcher = fetcher if fetcher is not None else TWDataFetcher()
         self.risk_calc = SLTPCalculator()
 
     def run_full_analysis(self, stock_id: str) -> dict:

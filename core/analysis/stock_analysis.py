@@ -13,6 +13,7 @@ import pandas as pd
 
 from core.data.tw_data_fetcher import TWDataFetcher
 from core.analysis.indicators import add_all_indicators, calc_buy_sell_score
+from core.analysis.patterns import detect_all_patterns
 
 
 @dataclass
@@ -25,9 +26,10 @@ class StockAnalysisResult:
     suggested_buy: list[float]
     suggested_sell: list[float]
     explanation: list[str]
-    technical: dict  # 技術面
-    fundamental: dict  # 資訊面：本益比、營收
-    chip: dict  # 籌碼面：三大法人、融資融券
+    technical: dict    # 技術指標
+    fundamental: dict  # 本益比、營收
+    chip: dict         # 三大法人、融資融券
+    patterns: dict     # K 線型態辨識結果
 
 
 def analyze_stock(
@@ -55,24 +57,37 @@ def analyze_stock(
     close = float(row["close"])
 
     # 指標
-    rsi = row.get("rsi")
-    kd_k = row.get("kd_k")
-    kd_d = row.get("kd_d")
+    rsi       = row.get("rsi")
+    kd_k      = row.get("kd_k")
+    kd_d      = row.get("kd_d")
     macd_hist = row.get("macd_hist")
-    ma20 = row.get("ma20")
-    bb_upper = row.get("bb_upper")
-    bb_lower = row.get("bb_lower")
+    ma5       = row.get("ma5")
+    ma20      = row.get("ma20")
+    ma60      = row.get("ma60")
+    bb_upper  = row.get("bb_upper")
+    bb_lower  = row.get("bb_lower")
     vol_ratio = row.get("vol_ratio")
+    atr       = row.get("atr")
 
     score = calc_buy_sell_score(row)
     technical = {
-        "rsi": round(float(rsi), 1) if pd.notna(rsi) else None,
-        "kd_k": round(float(kd_k), 1) if pd.notna(kd_k) else None,
-        "kd_d": round(float(kd_d), 1) if pd.notna(kd_d) else None,
-        "ma20": round(float(ma20), 2) if pd.notna(ma20) else None,
-        "bb_upper": round(float(bb_upper), 2) if pd.notna(bb_upper) else None,
-        "bb_lower": round(float(bb_lower), 2) if pd.notna(bb_lower) else None,
+        "rsi":       round(float(rsi), 1)       if pd.notna(rsi)       else None,
+        "kd_k":      round(float(kd_k), 1)      if pd.notna(kd_k)      else None,
+        "kd_d":      round(float(kd_d), 1)      if pd.notna(kd_d)      else None,
+        "ma5":       round(float(ma5), 2)        if pd.notna(ma5)       else None,
+        "ma20":      round(float(ma20), 2)       if pd.notna(ma20)      else None,
+        "ma60":      round(float(ma60), 2)       if pd.notna(ma60)      else None,
+        "bb_upper":  round(float(bb_upper), 2)   if pd.notna(bb_upper)  else None,
+        "bb_lower":  round(float(bb_lower), 2)   if pd.notna(bb_lower)  else None,
+        "vol_ratio": round(float(vol_ratio), 2)  if pd.notna(vol_ratio) else None,
+        "atr":       round(float(atr), 2)        if pd.notna(atr)       else None,
     }
+
+    # K 線型態辨識（傳入完整 df）
+    try:
+        patterns = detect_all_patterns(df)
+    except Exception:
+        patterns = {"detected": [], "primary": None, "fibonacci": {}, "summary": "型態辨識失敗"}
 
     # 籌碼面
     chip: dict = {}
@@ -196,4 +211,5 @@ def analyze_stock(
         technical=technical,
         fundamental=fundamental,
         chip=chip,
+        patterns=patterns,
     )

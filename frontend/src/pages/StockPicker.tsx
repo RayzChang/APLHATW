@@ -38,7 +38,7 @@ export function StockPicker() {
   const [history, setHistory] = useState<AnalysisHistory[]>([]);
   const [loadingStep, setLoadingStep] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Accordion states
   const [expandedReport, setExpandedReport] = useState<string | null>('technical');
@@ -62,9 +62,9 @@ export function StockPicker() {
     setResult(null);
     setError('');
     
-    // Simulate Loading
+    // 四個 AI Agent 各約 20~30 秒，總計預估 120 秒
     setLoadingStep(0);
-    setTimeLeft(35);
+    setTimeLeft(120);
     
     let currentStep = 0;
     let ticks = 0;
@@ -73,7 +73,8 @@ export function StockPicker() {
     
     timerRef.current = setInterval(() => {
         ticks++;
-        if (ticks % 6 === 0 && currentStep < 5) {
+        // 每 20 秒推進一個步驟（6 個步驟 × 20 秒 = 120 秒）
+        if (ticks % 20 === 0 && currentStep < 5) {
             currentStep++;
             setLoadingStep(currentStep);
         }

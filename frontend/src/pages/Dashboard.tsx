@@ -1,6 +1,7 @@
-import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
+import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp, RefreshCcw, Cpu, Clock, Search, ShoppingCart, Info } from 'lucide-react';
 import { PerformanceChart } from '../components/charts/PerformanceChart';
-import { useState, useEffect } from 'react';
+import { BacktestSection } from '../components/BacktestSection';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../api/axiosConfig';
 
 interface PortfolioSummary {
@@ -51,29 +52,78 @@ export function Dashboard() {
     const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(true);
     const [isTradesExpanded, setIsTradesExpanded] = useState(true);
 
-    const [watchlist] = useState([
-        { symbol: '2330', name: '台積電', price: 1040, change: 1.45, rsi: 62, volume: 34500 },
-        { symbol: '2317', name: '鴻海', price: 215, change: -0.23, rsi: 48, volume: 89000 },
-        { symbol: '2454', name: '聯發科', price: 1280, change: 0.50, rsi: 74, volume: 12000 },
-    ]);
+    // Real-time watchlist state
+    const [watchlist, setWatchlist] = useState<Array<{
+        symbol: string; name: string; price: number;
+        change: number; change_pct: number; volume: number; is_realtime: boolean;
+    }>>([]);
+    const [isWatchlistLoading, setIsWatchlistLoading] = useState(true);
 
-    // Market Scan State
-    const [scanState, setScanState] = useState({ is_scanning: false, current: 0, total: 0, message: '' });
+    const WATCHLIST_SYMBOLS = ['2330', '2317', '2454', '2412', '0050', '6415'];
+
+    const fetchWatchlist = useCallback(async () => {
+        setIsWatchlistLoading(true);
+        try {
+            const results = await Promise.allSettled(
+                WATCHLIST_SYMBOLS.map(sym => api.get(`/api/stock/quote/${sym}`))
+            );
+            const items = results
+                .map((r, i) => {
+                    if (r.status === 'fulfilled') {
+                        const d = r.value.data;
+                        return {
+                            symbol: WATCHLIST_SYMBOLS[i],
+                            name: d.name || WATCHLIST_SYMBOLS[i],
+                            price: d.price || 0,
+                            change: d.change || 0,
+                            change_pct: d.change_pct || 0,
+                            volume: Math.round((d.volume || 0) / 1000),
+                            is_realtime: d.is_realtime !== false,
+                        };
+                    }
+                    return null;
+                })
+                .filter(Boolean) as typeof watchlist;
+            setWatchlist(items);
+        } catch (e) {
+            console.error('Watchlist fetch failed:', e);
+        } finally {
+            setIsWatchlistLoading(false);
+        }
+    }, []);
+
+    // Market Scan State (擴充欄位)
+    const [scanState, setScanState] = useState({
+        is_scanning: false,
+        current: 0,
+        total: 0,
+        message: '',
+        last_scan_time: null as string | null,
+        last_scan_summary: '',
+        last_scan_ago: null as string | null,
+        stocks_screened: 0,
+        candidates_found: 0,
+        orders_placed: 0,
+        next_scan_info: '每個交易日 09:10 及 12:30 自動執行',
+    });
 
     const checkScanStatus = async () => {
         try {
             const res = await api.get('/api/simulation/scan/status');
-            setScanState(res.data);
-            return res.data.is_scanning;
+            // 使用 spread 安全合併，避免覆蓋 undefined 欄位
+            setScanState(prev => ({ ...prev, ...res.data }));
+            return res.data.is_scanning as boolean;
         } catch (e) {
             return false;
         }
     };
 
+    // 初始化時讀取一次掃描狀態
     useEffect(() => {
         checkScanStatus();
     }, []);
 
+    // 掃描中：每秒輪詢一次
     useEffect(() => {
         let interval: ReturnType<typeof setInterval>;
         if (scanState.is_scanning) {
@@ -84,6 +134,16 @@ export function Dashboard() {
                 }
             }, 1000);
         }
+        return () => clearInterval(interval);
+    }, [scanState.is_scanning]);
+
+    // 非掃描中：每 60 秒輕量輪詢，讓「上次掃描時間」保持最新
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (!scanState.is_scanning) {
+                checkScanStatus();
+            }
+        }, 60_000);
         return () => clearInterval(interval);
     }, [scanState.is_scanning]);
 
@@ -152,9 +212,11 @@ export function Dashboard() {
 
     useEffect(() => {
         refreshAllData();
+        fetchWatchlist();
         const interval = setInterval(refreshAllData, 30000); // Poll every 30s
-        return () => clearInterval(interval);
-    }, []);
+        const watchlistInterval = setInterval(fetchWatchlist, 60000); // Watchlist every 60s
+        return () => { clearInterval(interval); clearInterval(watchlistInterval); };
+    }, [fetchWatchlist]);
 
     // 格式化金錢
     const formatMoney = (val: number) => {
@@ -259,6 +321,97 @@ export function Dashboard() {
                 </button>
             </div>
 
+            {/* SECTION 2.5: AI 系統狀態說明 */}
+            <div className="panel p-5 border border-white/5 space-y-4">
+                {/* 標題 */}
+                <div className="flex items-center gap-2">
+                    <Cpu className="w-4 h-4 text-brand-primary" />
+                    <h3 className="text-sm font-black uppercase tracking-widest">AI 自動交易系統說明</h3>
+                    <span className="text-[10px] text-text-muted font-normal ml-1">— 這個系統在做什麼？</span>
+                </div>
+
+                {/* 流程說明 */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
+                        <Search className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
+                        <div>
+                            <div className="text-xs font-black text-white mb-0.5">第一層：全市場技術篩選</div>
+                            <div className="text-[10px] text-text-muted leading-relaxed">
+                                每個交易日 09:10 / 12:30，用 yfinance 批量下載全部台股 TWSE+TPEX 普通股（~2000+ 支）歷史 K 線，
+                                計算 RSI / KD / MACD / MA / 布林帶，取技術評分最高的前 30 名。
+                                <span className="text-brand-primary/70"> 此層免費，不消耗 API 配額。</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
+                        <Bot className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" />
+                        <div>
+                            <div className="text-xs font-black text-white mb-0.5">第二層：AI 四探員精析</div>
+                            <div className="text-[10px] text-text-muted leading-relaxed">
+                                對前 30 名候選股執行四個 AI Agent 深度分析（技術分析師 + 情緒分析師 + 風控師 + 首席決策官），
+                                只有信心度 ≥ 70% 且決策為 BUY 才實際下模擬單。
+                                <span className="text-yellow-400/70"> 每筆分析約 0.002 USD。</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
+                        <ShoppingCart className="w-5 h-5 text-success shrink-0 mt-0.5" />
+                        <div>
+                            <div className="text-xs font-black text-white mb-0.5">持倉管理（全天候）</div>
+                            <div className="text-[10px] text-text-muted leading-relaxed">
+                                盤中每分鐘自動監控所有持倉，觸發停損（進場價 − 2×ATR）或停利（進場價 + 3×ATR）時立即出場，
+                                保護資金安全。收盤後將持倉帶到隔日。
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 上次掃描狀態 */}
+                <div className="flex flex-wrap items-center gap-4 pt-1 border-t border-white/5">
+                    <div className="flex items-center gap-2 text-[11px]">
+                        <Clock className="w-3.5 h-3.5 text-text-muted" />
+                        <span className="text-text-muted">上次掃描：</span>
+                        <span className="text-white font-bold">
+                            {scanState.last_scan_ago
+                                ? scanState.last_scan_ago
+                                : scanState.last_scan_time
+                                    ? new Date(scanState.last_scan_time).toLocaleString('zh-TW')
+                                    : '尚未執行（等待第一次掃描）'
+                            }
+                        </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px]">
+                        <Clock className="w-3.5 h-3.5 text-brand-primary" />
+                        <span className="text-text-muted">自動排程：</span>
+                        <span className="text-brand-primary font-bold">{scanState.next_scan_info}</span>
+                    </div>
+                    {scanState.stocks_screened > 0 && (
+                        <>
+                            <div className="flex items-center gap-2 text-[11px]">
+                                <span className="text-text-muted">掃描股票：</span>
+                                <span className="text-white font-black">{scanState.stocks_screened.toLocaleString()} 支</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px]">
+                                <span className="text-text-muted">技術篩選：</span>
+                                <span className="text-yellow-400 font-black">{scanState.candidates_found} 個候選</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px]">
+                                <span className="text-text-muted">AI 下單：</span>
+                                <span className={`font-black ${scanState.orders_placed > 0 ? 'text-success' : 'text-text-muted'}`}>
+                                    {scanState.orders_placed} 筆
+                                </span>
+                            </div>
+                        </>
+                    )}
+                    {scanState.last_scan_summary && (
+                        <div className="w-full flex items-start gap-2 text-[10px] text-text-muted mt-1">
+                            <Info className="w-3 h-3 shrink-0 mt-0.5" />
+                            <span>{scanState.last_scan_summary}</span>
+                        </div>
+                    )}
+                </div>
+            </div>
+
             {/* SECTION 3: Split View 6:4 */}
             <div className="flex flex-col lg:flex-row gap-6 items-stretch">
                 {/* Left: Performance Chart */}
@@ -326,34 +479,49 @@ export function Dashboard() {
                         </div>
                     </div>
 
-                    {/* Bottom Right: Watchlist & RSI */}
+                    {/* Bottom Right: Real-time Watchlist */}
                     <div className="panel p-4 flex-1 flex flex-col min-h-0">
-                        <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 mb-3">
-                            <TrendingUp className="w-4 h-4 text-brand-primary" /> 觀察清單 & 技術指標
-                        </h3>
-                        <div className="flex-1 overflow-y-auto pr-1 space-y-2">
-                            {watchlist.map((item, i) => (
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
+                                <TrendingUp className="w-4 h-4 text-brand-primary" /> 即時觀察清單
+                            </h3>
+                            <button onClick={fetchWatchlist} disabled={isWatchlistLoading} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+                                <RefreshCcw className={`w-3.5 h-3.5 text-text-muted ${isWatchlistLoading ? 'animate-spin' : ''}`} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto pr-1 space-y-1">
+                            {isWatchlistLoading && watchlist.length === 0 ? (
+                                <div className="h-full flex items-center justify-center">
+                                    <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
+                                </div>
+                            ) : watchlist.map((item, i) => (
                                 <div key={i} className="flex items-center justify-between p-2 hover:bg-white/5 rounded-lg transition-colors">
-                                    <div className="flex flex-col w-[25%] shrink-0">
-                                        <span className="text-xs font-black text-text-main">{item.symbol}</span>
+                                    <div className="flex flex-col w-[28%] shrink-0">
+                                        <div className="flex items-center gap-1">
+                                            <span className="text-xs font-black text-text-main">{item.symbol}</span>
+                                            {!item.is_realtime && (
+                                                <span className="text-[8px] bg-text-muted/20 text-text-muted px-1 rounded leading-none">收盤</span>
+                                            )}
+                                        </div>
                                         <span className="text-[10px] text-text-muted truncate">{item.name}</span>
                                     </div>
-                                    <div className="text-right flex flex-col w-[25%] shrink-0">
+                                    <div className="text-right flex flex-col w-[28%] shrink-0">
                                         <span className="text-xs font-mono font-bold">{item.price.toLocaleString()}</span>
-                                        <span className={`text-[10px] font-mono font-bold ${item.change >= 0 ? 'text-danger' : 'text-success'}`}>
-                                            {item.change >= 0 ? '+' : ''}{item.change}%
+                                        <span className={`text-[10px] font-mono font-bold ${item.change_pct >= 0 ? 'text-danger' : 'text-success'}`}>
+                                            {item.change_pct >= 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
                                         </span>
                                     </div>
-                                    <div className="text-right flex flex-col w-[25%] shrink-0 pr-2">
+                                    <div className="text-right flex flex-col w-[22%] shrink-0">
                                         <span className="text-xs font-mono font-bold">{(item.volume || 0).toLocaleString()}</span>
                                         <span className="text-[10px] text-text-muted">張</span>
                                     </div>
-                                    <div className="flex flex-col items-end gap-1 w-[25%] shrink-0">
+                                    <div className="flex flex-col items-end gap-1 w-[22%] shrink-0">
                                         <span className={`text-[9px] font-black px-1.5 py-0.5 rounded leading-none ${
-                                            (item.rsi || 50) > 70 ? 'bg-danger/20 text-danger' : 
-                                            (item.rsi || 50) < 30 ? 'bg-success/20 text-success' : 'bg-white/10 text-text-muted'
+                                            item.change_pct > 3 ? 'bg-danger/20 text-danger' :
+                                            item.change_pct < -3 ? 'bg-success/20 text-success' :
+                                            item.change_pct > 0 ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'
                                         }`}>
-                                            {(item.rsi || 50) > 70 ? '超買' : (item.rsi || 50) < 30 ? '超賣' : '正常'}
+                                            {item.change_pct > 3 ? '強勢' : item.change_pct < -3 ? '弱勢' : item.change_pct > 0 ? '上漲' : '下跌'}
                                         </span>
                                     </div>
                                 </div>
@@ -440,7 +608,10 @@ export function Dashboard() {
                 </div>
             </div>
 
-            {/* SECTION 5: Trade History Collapsible */}
+            {/* SECTION 5: Backtest Section */}
+            <BacktestSection isScanRunning={scanState.is_scanning} />
+
+            {/* SECTION 6: Trade History Collapsible */}
             <div className="panel overflow-hidden mb-6">
                 <button 
                     onClick={() => setIsTradesExpanded(!isTradesExpanded)}

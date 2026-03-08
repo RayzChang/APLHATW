@@ -1,5 +1,6 @@
 # === 台股資料 ===
-FinMind>=1.0.0
+FinMind>=1.9.0
+yfinance>=0.2.36
 pandas>=2.1.0
 numpy>=1.24.0
 pyarrow>=14.0.0

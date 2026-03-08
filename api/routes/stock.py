@@ -26,13 +26,44 @@ async def analyze_stock_deep(stock_id: str, request: Request):
 @router.get("/quote/{stock_id}")
 async def get_stock_quote(stock_id: str, request: Request):
     """
-    取得單一股票即時報價 (TWSE MIS API)
+    取得單一股票即時報價。
+    盤中：TWSE MIS API 即時價。
+    休市/週末：fallback 到 FinMind 最後一筆收盤價。
     """
+    from datetime import datetime, timedelta
     fetcher = request.app.state.fetcher
-    try:
-        res = fetcher.fetch_realtime_quote(stock_id)
-        if not res:
-            raise HTTPException(status_code=404, detail=f"查無此股票行情: {stock_id}")
+
+    # 先嘗試即時報價
+    res = fetcher.fetch_realtime_quote(stock_id)
+    if res:
         return res
+
+    # 即時無資料（休市）→ 用 FinMind 最近 5 個交易日收盤價補足
+    try:
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+        df = fetcher.fetch_klines(stock_id, start, end)
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else last
+            price = float(last["close"])
+            prev_close = float(prev["close"])
+            change = round(price - prev_close, 2)
+            change_pct = round(change / prev_close * 100, 2) if prev_close else 0.0
+            return {
+                "price": price,
+                "name": fetcher.get_symbol_name(stock_id),
+                "open": float(last.get("open", price)),
+                "high": float(last.get("high", price)),
+                "low": float(last.get("low", price)),
+                "volume": int(last.get("volume", 0)),
+                "change": change,
+                "change_pct": change_pct,
+                "yesterday_close": prev_close,
+                "is_realtime": False,
+                "note": "休市中，顯示最後收盤價",
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"抓取行情失敗: {str(e)}")
+
+    raise HTTPException(status_code=404, detail=f"查無此股票行情: {stock_id}")

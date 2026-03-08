@@ -15,6 +15,11 @@ from loguru import logger
 from config.settings import SCREENER_STRATEGIES
 from core.data.tw_data_fetcher import TWDataFetcher
 from core.analysis.indicators import add_all_indicators, calc_buy_sell_score
+from core.analysis.patterns import (
+    detect_double_bottom, detect_double_top,
+    detect_inverse_head_shoulders, detect_head_shoulders,
+    detect_triangle, detect_breakout, detect_fibonacci,
+)
 
 
 @dataclass
@@ -28,8 +33,20 @@ class ScreenerResult:
     strategy_name: str
 
 
-def _check_strategy(row: pd.Series, strategy_id: str) -> bool:
-    """檢查單一策略條件"""
+_PATTERN_STRATEGIES = {
+    "double_bottom", "double_top",
+    "head_shoulders_bottom", "head_shoulders_top",
+    "triangle_bull", "breakout_up", "breakdown", "fib_support",
+}
+
+
+def _check_strategy(row: pd.Series, strategy_id: str, df: pd.DataFrame = None) -> bool:
+    """
+    檢查單一策略條件。
+    技術指標策略只需要 row（最後一根 K 線的 Series）。
+    K 線型態策略需要完整 df（若 df 為 None 則跳過）。
+    """
+    # ── 技術指標策略 ──────────────────────────────
     if strategy_id == "list_all":
         return True
     if strategy_id == "buy_score":
@@ -40,7 +57,7 @@ def _check_strategy(row: pd.Series, strategy_id: str) -> bool:
         return row.get("vol_ratio", 0) >= 1.5
     if strategy_id == "oversold":
         rsi = row.get("rsi")
-        bb = row.get("bb_pct")
+        bb  = row.get("bb_pct")
         return (pd.notna(rsi) and rsi < 30) or (pd.notna(bb) and bb < 0)
     if strategy_id == "kd_golden":
         k, d = row.get("kd_k"), row.get("kd_d")
@@ -64,6 +81,39 @@ def _check_strategy(row: pd.Series, strategy_id: str) -> bool:
         return pd.notna(row.get("bb_pct")) and row["bb_pct"] > 1.0
     if strategy_id == "bb_lower":
         return pd.notna(row.get("bb_pct")) and row["bb_pct"] < 0.0
+
+    # ── K 線型態策略（需要完整 df）────────────────
+    if strategy_id in _PATTERN_STRATEGIES:
+        if df is None or len(df) < 30:
+            return False
+        try:
+            if strategy_id == "double_bottom":
+                r = detect_double_bottom(df)
+                return r is not None and r.completion >= 50
+            if strategy_id == "double_top":
+                r = detect_double_top(df)
+                return r is not None and r.completion >= 50
+            if strategy_id == "head_shoulders_bottom":
+                r = detect_inverse_head_shoulders(df)
+                return r is not None and r.completion >= 70
+            if strategy_id == "head_shoulders_top":
+                r = detect_head_shoulders(df)
+                return r is not None and r.completion >= 70
+            if strategy_id == "triangle_bull":
+                r = detect_triangle(df)
+                return r is not None and r.signal == "bullish" and r.completion >= 50
+            if strategy_id == "breakout_up":
+                r = detect_breakout(df, lookback=20)
+                return r is not None and r.pattern_id == "breakout_up"
+            if strategy_id == "breakdown":
+                r = detect_breakout(df, lookback=20)
+                return r is not None and r.pattern_id == "breakdown"
+            if strategy_id == "fib_support":
+                fib = detect_fibonacci(df)
+                return bool(fib.get("near_support"))
+        except Exception:
+            return False
+
     return False
 
 
@@ -103,7 +153,7 @@ def run_screener(
                 if sid not in strategy_map:
                     continue
                 s = strategy_map[sid]
-                if _check_strategy(row, sid):
+                if _check_strategy(row, sid, df=df):
                     if sid == "list_all":
                         signal = "BUY" if score >= 1 else "SELL" if score <= -1 else "觀望"
                     else:

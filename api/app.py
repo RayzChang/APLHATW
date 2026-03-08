@@ -21,11 +21,11 @@ from core.execution.simulator import TradeSimulator
 from core.strategy.screener import StockScreener
 from core.scheduler import init_scheduler, shutdown_scheduler
 
-# 初始化單一全域實例
-fetcher = TWDataFetcher()
-orchestrator = TradingOrchestrator()
-simulator = TradeSimulator()
-screener = StockScreener(data_fetcher=fetcher)
+# 初始化單一全域實例（orchestrator 共用同一個 fetcher，避免重複 FinMind 登入）
+fetcher      = TWDataFetcher()
+orchestrator = TradingOrchestrator(fetcher=fetcher)
+simulator    = TradeSimulator()
+screener     = StockScreener(data_fetcher=fetcher)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,7 +57,7 @@ app = FastAPI(
 # CORS 設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "*"],
+    allow_origins=["http://localhost:5173", "http://localhost:8000", "http://localhost:8890"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,10 +67,24 @@ app.add_middleware(
 from api.routes.market import router as market_router
 from api.routes.simulation import router as sim_router
 from api.routes.stock import router as stock_router
+from api.routes.analyze import router as analyze_router
+from api.routes.screener import router as screener_router
+from api.routes.backtest import router as backtest_router
+from api.routes.klines import router as klines_router
+from api.routes.watchlist import router as watchlist_router
+from api.routes.portfolio import router as portfolio_router
+from api.routes.settings import router as settings_router
 
-app.include_router(market_router, prefix="/api/market", tags=["Market"])
-app.include_router(sim_router, prefix="/api/simulation", tags=["Simulation"])
-app.include_router(stock_router, prefix="/api/stock", tags=["Stock"])
+app.include_router(market_router,   prefix="/api/market",     tags=["Market"])
+app.include_router(sim_router,      prefix="/api/simulation",  tags=["Simulation"])
+app.include_router(stock_router,    prefix="/api/stock",       tags=["Stock"])
+app.include_router(analyze_router,  prefix="/api/analyze",     tags=["Analyze"])
+app.include_router(screener_router, prefix="/api/screener",    tags=["Screener"])
+app.include_router(backtest_router, prefix="/api/backtest",    tags=["Backtest"])
+app.include_router(klines_router,   prefix="/api/klines",      tags=["Klines"])
+app.include_router(watchlist_router,prefix="/api/watchlist",   tags=["Watchlist"])
+app.include_router(portfolio_router,prefix="/api/portfolio",   tags=["Portfolio"])
+app.include_router(settings_router, prefix="/api/settings",    tags=["Settings"])
 
 # 健康檢查
 @app.get("/api/health")
