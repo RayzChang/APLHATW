@@ -17,8 +17,9 @@ FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 # === AI API ===
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# === Notifications ===
-LINE_NOTIFY_TOKEN = os.getenv("LINE_NOTIFY_TOKEN", "")
+# === LINE Bot 推播通知 ===
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+LINE_USER_ID = os.getenv("LINE_USER_ID", "")
 
 # === 模擬交易 ===
 SIMULATION_INITIAL_BALANCE = float(os.getenv("SIMULATION_INITIAL_BALANCE", "1000000"))

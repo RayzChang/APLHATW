@@ -281,9 +281,20 @@ def job_daily_market_scan():
                         "take_profit_price": decision.get("take_profit_price") or tp,
                     }
                     result = simulator.execute_signal(signal)
-                    if result and result.get("status") == "ok":
+                    if result and result.get("executed"):
                         orders_placed += 1
                         logger.info(f"Scheduler: BUY order placed → {symbol}")
+
+                        from core.notification.line_bot import notify_buy
+                        notify_buy(
+                            stock_id=symbol,
+                            name=stock_name,
+                            price=live_price,
+                            shares=result.get("shares", 0),
+                            confidence=confidence,
+                            stop_loss=signal["stop_loss_price"],
+                            take_profit=signal["take_profit_price"],
+                        )
 
             except Exception as inner_e:
                 logger.warning(f"Scheduler: Error analyzing {symbol}: {inner_e}")
@@ -299,6 +310,9 @@ def job_daily_market_scan():
         scan_state["last_scan_summary"] = summary_msg
         scan_state["message"]           = summary_msg
         logger.info(f"Scheduler: {summary_msg}")
+
+        from core.notification.line_bot import notify_scan_complete
+        notify_scan_complete(len(yf_data), len(top_candidates), orders_placed)
 
     except Exception as e:
         err_msg = f"掃描過程發生錯誤: {e}"
@@ -351,6 +365,25 @@ def job_check_simulation_stops():
             logger.info(
                 f"Scheduler [Check Stops]: {len(actions)} risk action(s): {actions}"
             )
+            from core.notification.line_bot import notify_sell
+            for act in actions:
+                if act.get("action") == "SELL":
+                    sid = act["stock_id"]
+                    sell_trade = next(
+                        (t for t in reversed(simulator.trade_history)
+                         if t.get("stock_id") == sid and t.get("type") == "SELL"),
+                        None,
+                    )
+                    if sell_trade:
+                        notify_sell(
+                            stock_id=sid,
+                            name=sell_trade.get("name", sid),
+                            price=act.get("price", 0),
+                            shares=sell_trade.get("shares", 0),
+                            reason=act.get("reason", "風控觸發"),
+                            pnl=sell_trade.get("pnl", 0),
+                            pnl_pct=sell_trade.get("pnl_pct", 0),
+                        )
         else:
             logger.debug("Scheduler [Check Stops]: All positions healthy.")
     except Exception as e:

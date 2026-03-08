@@ -1,4 +1,4 @@
-import { X, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, Loader2, Bell, BellOff } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../api/axiosConfig';
 
@@ -15,6 +15,7 @@ interface BackendSettings {
     has_finmind_token: boolean;
     has_gemini_key: boolean;
     has_line_token: boolean;
+    line_notify_enabled: boolean;
 }
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
@@ -22,6 +23,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const [newSymbol, setNewSymbol] = useState('');
     const [watchlist, setWatchlist] = useState<string[]>(['2330', '2317', '2454', '2412', '0050']);
     const [backendInfo, setBackendInfo] = useState<BackendSettings | null>(null);
+    const [lineEnabled, setLineEnabled] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [saveMsg, setSaveMsg] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -35,6 +37,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 setBackendInfo(s);
                 setBalance(String(s.initial_capital));
                 setWatchlist(s.watchlist);
+                setLineEnabled(s.line_notify_enabled ?? false);
             })
             .catch(() => {
                 // fallback to localStorage
@@ -71,7 +74,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const capitalChanged = backendInfo && newCapital !== backendInfo.initial_capital;
 
         try {
+            const lineChanged = backendInfo && lineEnabled !== backendInfo.line_notify_enabled;
             const payload: Record<string, unknown> = { watchlist };
+            if (lineChanged) {
+                payload.line_notify_enabled = lineEnabled;
+            }
             if (capitalChanged) {
                 if (!confirm(`確定要將初始資金調整為 ${newCapital.toLocaleString()} 並重置所有模擬資料嗎？此動作無法復原！`)) {
                     setIsSaving(false);
@@ -197,6 +204,46 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             ))}
                         </div>
                         <p className="text-xs text-gray-500">AI 每天自動掃描這些股票，找出買賣機會。建議 5-20 檔，過多會影響速度。</p>
+                    </div>
+
+                    {/* LINE Notification Toggle */}
+                    <div className="space-y-3">
+                        <label className="text-sm font-bold text-gray-300">🔔 LINE 推播通知</label>
+                        <div className="flex items-center justify-between p-4 bg-black/20 rounded-xl border border-white/5">
+                            <div className="flex items-center gap-3">
+                                {lineEnabled
+                                    ? <Bell className="w-5 h-5 text-brand-primary" />
+                                    : <BellOff className="w-5 h-5 text-text-muted" />}
+                                <div>
+                                    <div className="text-sm font-bold text-white">
+                                        {lineEnabled ? '通知已開啟' : '通知已關閉'}
+                                    </div>
+                                    <div className="text-[11px] text-text-muted">
+                                        AI 買入、賣出、掃描完成時推送 LINE 訊息
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setLineEnabled(!lineEnabled)}
+                                className={`relative w-12 h-6 rounded-full transition-colors ${
+                                    lineEnabled ? 'bg-brand-primary' : 'bg-white/20'
+                                }`}
+                            >
+                                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                                    lineEnabled ? 'translate-x-6' : ''
+                                }`} />
+                            </button>
+                        </div>
+                        {!backendInfo?.has_line_token && (
+                            <p className="text-xs text-yellow-400 flex items-center gap-1">
+                                ⚠️ LINE Bot 尚未設定 — 請在 .env 填入 LINE_CHANNEL_ACCESS_TOKEN 和 LINE_USER_ID 後重啟後端
+                            </p>
+                        )}
+                        {backendInfo?.has_line_token && (
+                            <p className="text-xs text-gray-500">
+                                已連接 LINE Bot。開啟後，AI 每次買入、賣出、完成掃描都會即時推送通知到你的 LINE。
+                            </p>
+                        )}
                     </div>
 
                     {/* Save Message */}

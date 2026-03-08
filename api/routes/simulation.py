@@ -2,7 +2,10 @@
 模擬交易 API — 投資組合管理與自動循環
 """
 
+import csv
+import io
 from fastapi import APIRouter, Request, BackgroundTasks
+from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
@@ -195,6 +198,50 @@ def get_current_positions(request: Request):
         })
 
     return normalized
+
+
+@router.get("/trades/export")
+def export_trades_csv(request: Request):
+    """將歷史交易紀錄匯出為 CSV 檔案下載。"""
+    simulator = request.app.state.simulator
+
+    buf = io.StringIO()
+    buf.write("\ufeff")  # BOM for Excel UTF-8
+
+    writer = csv.writer(buf)
+    writer.writerow([
+        "時間", "操作", "股票代號", "股票名稱",
+        "股數", "成交價", "總金額", "手續費", "交易稅",
+        "損益(元)", "損益(%)", "剩餘現金",
+    ])
+
+    for t in simulator.trade_history:
+        action = t.get("type", t.get("action", ""))
+        shares = t.get("shares", 0)
+        price  = t.get("price", 0)
+        total  = t.get("total_cost", shares * price) if action == "BUY" else shares * price
+
+        writer.writerow([
+            t.get("timestamp", ""),
+            "買入" if action == "BUY" else "賣出",
+            t.get("stock_id", ""),
+            t.get("name", t.get("stock_name", "")),
+            shares,
+            round(price, 2),
+            round(total, 2),
+            round(t.get("fee", 0), 2),
+            round(t.get("tax", 0), 2),
+            round(t.get("pnl", 0), 2) if t.get("pnl") is not None else "",
+            round(t.get("pnl_pct", 0), 2) if t.get("pnl_pct") is not None else "",
+            round(t.get("remaining_cash", 0), 2),
+        ])
+
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=AlphaTW_trades.csv"},
+    )
 
 
 @router.get("/scan/status")

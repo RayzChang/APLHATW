@@ -92,6 +92,20 @@ AI 不需要你手動觸發，會在以下時間自動執行：
 
 > **ATR（Average True Range）**：衡量股票日常波動幅度的指標，數字越大代表這檔股票波動越劇烈。
 
+#### LINE 即時推播通知
+
+設定好 LINE Bot 後，AI 的每一步操作都會即時推送到你的 LINE：
+
+- **買入通知**：告訴你買了什麼、多少股、停損停利設在哪
+- **賣出通知**：告訴你賣了什麼、原因、賺賠多少
+- **掃描完成通知**：告訴你掃了幾支、找到幾個候選、下了幾筆單
+
+> 設定方式見 [快速啟動 — LINE Bot 設定](#22-設定-line-bot選用)
+
+#### 交易紀錄匯出 CSV
+
+在「歷史交易紀錄」區塊右上角點擊「匯出 CSV」，即可下載所有買賣紀錄為 Excel 可開啟的表格檔案，方便記帳或對帳。
+
 #### 在 Dashboard 可以看到什麼？
 
 - **虛擬總資產**：100 萬 + 獲利或虧損
@@ -206,17 +220,35 @@ cd frontend
 npm install
 ```
 
-### 2. 設定環境變數
+### 2.1 設定環境變數（必要）
 
 複製 `.env.example` 為 `.env`，填入以下必要金鑰：
 
 ```
-GOOGLE_GEMINI_API_KEY=你的_Gemini_API_金鑰
+GEMINI_API_KEY=你的_Gemini_API_金鑰
 FINMIND_TOKEN=你的_FinMind_API_Token
 ```
 
 - **Gemini API Key**：[Google AI Studio](https://aistudio.google.com/) 免費申請
 - **FinMind Token**：[FinMind 官網](https://finmindtrade.com/) 免費申請（每小時 600 次免費額度）
+
+### 2.2 設定 LINE Bot（選用）
+
+如果希望 AI 買賣時即時推送 LINE 通知：
+
+1. 前往 [LINE Developers](https://developers.line.biz/)，用 LINE 帳號登入
+2. 建立一個 **Messaging API** 頻道
+3. 在頻道設定頁面找到 **Channel access token**，點「Issue」產生
+4. 用你的 LINE 掃描 Bot 的 QR Code，加 Bot 為好友
+5. 取得你的 **User ID**（在 LINE Developers 頻道的「Basic settings」頁面底部）
+6. 在 `.env` 填入：
+
+```
+LINE_CHANNEL_ACCESS_TOKEN=你的頻道存取權杖
+LINE_USER_ID=你的LINE用戶ID
+```
+
+7. 重啟後端，到系統設定（齒輪圖示）開啟 LINE 推播開關
 
 ### 3. 啟動後端
 

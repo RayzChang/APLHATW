@@ -1,4 +1,4 @@
-import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp, RefreshCcw, Cpu, Clock, Search, ShoppingCart, Info } from 'lucide-react';
+import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp, RefreshCcw, Cpu, Clock, Search, ShoppingCart, Info, Download } from 'lucide-react';
 import { PerformanceChart } from '../components/charts/PerformanceChart';
 import { BacktestSection } from '../components/BacktestSection';
 import { useState, useEffect, useCallback } from 'react';
@@ -157,6 +157,15 @@ export function Dashboard() {
         } catch (e) {
             alert('啟動失敗，請確認後端是否正在運行中！');
         }
+    };
+
+    const handleExportCSV = () => {
+        const link = document.createElement('a');
+        link.href = '/api/simulation/trades/export';
+        link.download = 'AlphaTW_trades.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     };
 
     const handleReset = async () => {
@@ -622,6 +631,14 @@ export function Dashboard() {
                         歷史交易紀錄
                     </h3>
                     <div className="flex items-center gap-3">
+                        {trades.length > 0 && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleExportCSV(); }}
+                                className="btn btn-secondary gap-1.5 px-3 py-1.5 text-[11px]"
+                            >
+                                <Download className="w-3.5 h-3.5" /> 匯出 CSV
+                            </button>
+                        )}
                         <span className="text-xs text-text-muted font-bold">近期 {trades.length} 筆</span>
                         {isTradesExpanded ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
                     </div>
