@@ -21,7 +21,7 @@ class SentimentAnalystAgent(BaseAgent):
 【分析流程，必須照順序執行】
 
 Step 1：立刻搜尋以下三組關鍵字
-搜尋1："{股票名稱} {股票代碼} 新聞 2026"
+搜尋1："{股票名稱} {股票代碼} 新聞 {今年}"
 搜尋2："{股票名稱} 外資 投信 籌碼 買超 賣超"
 搜尋3："{股票名稱} 營收 EPS 法說會 獲利"
 
@@ -57,9 +57,9 @@ Step 2：整理搜尋結果，輸出以下報告
 
 【鐵則】
 - 必須執行搜尋，不得跳過
-- 搜尋到資料才能分析，但禁止說「缺乏數據」
+- 若資料不足，必須明確標註「資料信心等級：低/中/高」
 - 若真的搜尋不到，說明搜尋了什麼、結果如何，
-  然後基於技術面和產業背景做合理推斷
+  然後提供保守結論（偏中立，降低信心）
 - 禁止輸出免責聲明
 - 報告長度：400~600字
     """
@@ -78,6 +78,9 @@ Step 2：整理搜尋結果，輸出以下報告
         """
         傳入近期新聞，請 Agent 進行分析
         """
+        from datetime import datetime
+
+        current_year = datetime.now().year
         # 整理新聞資料讓 prompt 更簡潔
         formatted_news = []
         for n in news_items:
@@ -90,6 +93,8 @@ Step 2：整理搜尋結果，輸出以下報告
 
         prompt = f"""
         標的：{name} ({symbol})
+        今年：{current_year}
+        搜尋關鍵字年份請使用：{current_year}
         
         近期相關新聞與系統初步情緒評分：
         {json.dumps(formatted_news, indent=2, ensure_ascii=False)}

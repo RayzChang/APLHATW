@@ -41,7 +41,9 @@ class TradeSimulator:
             max_position_pct=self.max_position_pct,
         )
         self.risk_engine = RiskEngine(commission_rate=self.commission_rate)
-        
+        self.consecutive_loss_limit = 3
+        self.daily_loss_limit_pct = 3.0
+
         # 確保資料庫與資料表存在
         self._ensure_db_initialized()
         self.load_state()
@@ -73,16 +75,17 @@ class TradeSimulator:
         self.positions = {}
         self.trade_history = []
         self.equity_curve = [{"timestamp": datetime.now().isoformat(), "total_assets": self.cash}]
-        
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
-        
+
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS positions (stock_id TEXT PRIMARY KEY, data TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS equity (timestamp TEXT PRIMARY KEY, total_assets REAL)")
+        cursor.execute("DELETE FROM state")
+        cursor.execute("DELETE FROM positions")
+        cursor.execute("DELETE FROM trades")
+        cursor.execute("DELETE FROM equity")
         conn.commit()
         conn.close()
         self.save_state()
@@ -180,6 +183,65 @@ class TradeSimulator:
     def execute_signal(self, signal: dict | TradeSignal) -> dict:
         """Legacy adapter maintained for existing routes/jobs."""
         return self.execute_trade_signal(signal).model_dump()
+
+    def _today_realized_pnl(self) -> float:
+        today = datetime.now().date()
+        total = 0.0
+        for trade in self.trade_history:
+            if trade.get("type") != "SELL":
+                continue
+            ts = trade.get("timestamp")
+            if not ts:
+                continue
+            try:
+                if datetime.fromisoformat(ts).date() == today:
+                    total += float(trade.get("pnl", 0.0) or 0.0)
+            except Exception:
+                continue
+        return total
+
+    def _consecutive_losses(self) -> int:
+        streak = 0
+        for trade in reversed(self.trade_history):
+            if trade.get("type") != "SELL":
+                continue
+            pnl = float(trade.get("pnl", 0.0) or 0.0)
+            if pnl < 0:
+                streak += 1
+            else:
+                break
+        return streak
+
+    def can_open_new_position(self) -> tuple[bool, str]:
+        daily_realized = self._today_realized_pnl()
+        daily_loss_limit = self.initial_capital * (self.daily_loss_limit_pct / 100.0)
+        if daily_realized <= -daily_loss_limit:
+            return (
+                False,
+                f"今日已達單日虧損上限 ({self.daily_loss_limit_pct:.1f}%)，暫停新開倉",
+            )
+
+        loss_streak = self._consecutive_losses()
+        if loss_streak >= self.consecutive_loss_limit:
+            return (
+                False,
+                f"連續虧損 {loss_streak} 筆，啟動保護模式，暫停新開倉",
+            )
+
+        return True, ""
+
+    def get_guardrails_status(self) -> dict:
+        daily_realized = self._today_realized_pnl()
+        loss_streak = self._consecutive_losses()
+        can_trade, reason = self.can_open_new_position()
+        return {
+            "can_open_new_position": can_trade,
+            "reason": reason,
+            "daily_realized_pnl": round(daily_realized, 2),
+            "daily_loss_limit_pct": self.daily_loss_limit_pct,
+            "consecutive_losses": loss_streak,
+            "consecutive_loss_limit": self.consecutive_loss_limit,
+        }
 
     def update_current_prices(self, current_prices: dict):
         """

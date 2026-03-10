@@ -7,8 +7,13 @@ from loguru import logger
 from core.scheduler.shared import get_runtime_services
 
 
-def job_daily_market_scan():
+def job_daily_market_scan(force: bool = False):
     from api.routes.simulation import scan_state
+
+    if not force and not scan_state.get("auto_scan_enabled", False):
+        scan_state["message"] = "自動交易未啟用，略過排程掃描"
+        logger.info("Scheduler: auto scan disabled, skip scheduled market scan.")
+        return
 
     if scan_state.get("is_scanning"):
         logger.warning("Scheduler: scan already running, skipping.")
@@ -31,6 +36,36 @@ def job_daily_market_scan():
 
     try:
         fetcher, simulator, analysis_pipeline, screening_service = get_runtime_services()
+        decision_engine = analysis_pipeline.decision_engine
+
+        no_trade_streak = int(scan_state.get("no_trade_streak", 0) or 0)
+        relaxed_mode = no_trade_streak >= 3
+        if relaxed_mode:
+            decision_engine.configure(
+                min_confidence=0.65,
+                min_risk_reward=1.3,
+                max_position_pct=5.0,
+                require_positive_alignment=True,
+            )
+            scan_state["adaptive_mode"] = "RELAXED"
+            scan_state["adaptive_thresholds"] = {
+                "min_confidence": 0.65,
+                "min_risk_reward": 1.3,
+                "max_position_pct": 5.0,
+            }
+        else:
+            decision_engine.configure(
+                min_confidence=0.7,
+                min_risk_reward=1.5,
+                max_position_pct=20.0,
+                require_positive_alignment=True,
+            )
+            scan_state["adaptive_mode"] = "STRICT"
+            scan_state["adaptive_thresholds"] = {
+                "min_confidence": 0.7,
+                "min_risk_reward": 1.5,
+                "max_position_pct": 20.0,
+            }
 
         scan_state["message"] = "從 FinMind 取得全市場上市/上櫃股票清單..."
         all_stocks = fetcher.get_all_stock_ids_with_market()
@@ -124,6 +159,10 @@ def job_daily_market_scan():
             f"技術篩選出 {len(top_candidates)} 個候選 → AI 決定買入 {orders_placed} 檔"
         )
         scan_state["orders_placed"] = orders_placed
+        if orders_placed > 0:
+            scan_state["no_trade_streak"] = 0
+        else:
+            scan_state["no_trade_streak"] = no_trade_streak + 1
         scan_state["last_scan_time"] = datetime.now().isoformat()
         scan_state["last_scan_summary"] = summary_msg
         scan_state["message"] = summary_msg
@@ -141,4 +180,3 @@ def job_daily_market_scan():
         scan_state["last_scan_summary"] = err_msg
     finally:
         scan_state["is_scanning"] = False
-

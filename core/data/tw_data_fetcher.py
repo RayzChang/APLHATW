@@ -12,6 +12,7 @@ from typing import Optional
 import requests
 import json
 import pandas as pd
+import yfinance as yf
 from loguru import logger
 
 from FinMind.data import DataLoader
@@ -19,6 +20,20 @@ from FinMind.data import DataLoader
 from config.settings import FINMIND_TOKEN
 
 FUTURES_SYMBOLS = {"TX", "MTX", "TXF", "MXF"}
+_COMMON_STOCK_NAME_MAP = {
+    "2330": "台積電",
+    "2317": "鴻海",
+    "2454": "聯發科",
+    "2412": "中華電",
+    "2303": "聯電",
+    "5274": "信驊",
+    "8046": "南電",
+    "5269": "祥碩",
+    "6237": "驊訊",
+    "0050": "元大台灣50",
+    "6415": "矽力-KY",
+    "2603": "長榮",
+}
 
 _STOCK_NAME_CACHE: dict[str, str] = {}
 _STOCK_TYPE_CACHE: dict[str, str] = {}   # "tse" | "otc"
@@ -120,28 +135,42 @@ class TWDataFetcher:
             end = datetime.now().strftime("%Y-%m-%d")
         if symbol in FUTURES_SYMBOLS:
             return self._fetch_futures_klines(symbol, start, end)
+        if symbol.upper() == "TAIEX":
+            return self._fetch_taiex_klines(start, end)
         try:
-            df = self._dl.taiwan_stock_daily(
+            raw = self._dl.taiwan_stock_daily(
                 stock_id=symbol, start_date=start, end_date=end
             )
-            if df is None or df.empty:
-                return pd.DataFrame()
-            df = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date").reset_index(drop=True)
-            for col in ["open", "high", "low", "close", "volume"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-            keep = [c for c in ["date", "open", "high", "low", "close", "volume"] if c in df.columns]
-            return df[keep]
+            df = self._coerce_finmind_df(raw)
+            if df is not None and not df.empty:
+                df = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.sort_values("date").reset_index(drop=True)
+                for col in ["open", "high", "low", "close", "volume"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                keep = [c for c in ["date", "open", "high", "low", "close", "volume"] if c in df.columns]
+                return df[keep]
         except Exception as e:
             logger.error(f"fetch_klines({symbol}): {e}")
-            return pd.DataFrame()
+
+        return self._fetch_yfinance_stock_klines(symbol, start, end)
 
     def get_symbol_name(self, symbol: str) -> str:
         """回傳股票中文名稱，找不到時回傳代碼本身。"""
         self._refresh_stock_info()
-        return _STOCK_NAME_CACHE.get(symbol, symbol)
+        cached = _STOCK_NAME_CACHE.get(symbol)
+        if cached:
+            return cached
+
+        if symbol in _COMMON_STOCK_NAME_MAP:
+            return _COMMON_STOCK_NAME_MAP[symbol]
+
+        fallback = self._lookup_name_from_yfinance(symbol)
+        if fallback:
+            _STOCK_NAME_CACHE[symbol] = fallback
+            return fallback
+        return symbol
 
     def get_stock_list(self, market_type: str = "all") -> pd.DataFrame:
         """
@@ -155,7 +184,7 @@ class TWDataFetcher:
                 {"stock_id": "MTX", "name": "台指期小台", "type": "futures"},
             ])
         try:
-            df = self._dl.taiwan_stock_info()
+            df = self._fetch_stock_info_df()
             if df is None or df.empty:
                 return pd.DataFrame()
             df = df.rename(columns={"stock_name": "name"})
@@ -179,7 +208,7 @@ class TWDataFetcher:
         self._refresh_stock_info()
         # _STOCK_TYPE_CACHE 可能只有部分資料，直接呼叫一次完整清單
         try:
-            df = self._dl.taiwan_stock_info()
+            df = self._fetch_stock_info_df()
             if df is None or df.empty:
                 return {}
             # 只保留 twse / tpex，排除 emerging（興櫃）
@@ -204,9 +233,10 @@ class TWDataFetcher:
         回傳欄位：date, name（機構名）, buy, sell
         """
         try:
-            df = self._dl.taiwan_stock_institutional_investors(
+            raw = self._dl.taiwan_stock_institutional_investors(
                 stock_id=symbol, start_date=start, end_date=end
             )
+            df = self._coerce_finmind_df(raw)
             if df is None or df.empty:
                 return pd.DataFrame()
             df["date"] = pd.to_datetime(df["date"])
@@ -224,9 +254,10 @@ class TWDataFetcher:
         回傳欄位包含：date, MarginPurchaseTodayBalance, ShortSaleTodayBalance
         """
         try:
-            df = self._dl.taiwan_stock_margin_purchase_short_sale(
+            raw = self._dl.taiwan_stock_margin_purchase_short_sale(
                 stock_id=symbol, start_date=start, end_date=end
             )
+            df = self._coerce_finmind_df(raw)
             if df is None or df.empty:
                 return pd.DataFrame()
             df["date"] = pd.to_datetime(df["date"])
@@ -243,9 +274,10 @@ class TWDataFetcher:
         try:
             end = datetime.now().strftime("%Y-%m-%d")
             start = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
-            df = self._dl.taiwan_stock_per_pbr(
+            raw = self._dl.taiwan_stock_per_pbr(
                 stock_id=symbol, start_date=start, end_date=end
             )
+            df = self._coerce_finmind_df(raw)
             if df is None or df.empty:
                 return None
             df = df.sort_values("date", ascending=False)
@@ -264,9 +296,10 @@ class TWDataFetcher:
         回傳欄位：date, revenue
         """
         try:
-            df = self._dl.taiwan_stock_month_revenue(
+            raw = self._dl.taiwan_stock_month_revenue(
                 stock_id=symbol, start_date=start, end_date=end
             )
+            df = self._coerce_finmind_df(raw)
             if df is None or df.empty:
                 return pd.DataFrame()
             df["date"] = pd.to_datetime(df["date"])
@@ -289,7 +322,7 @@ class TWDataFetcher:
         if _CACHE_LOADED:
             return
         try:
-            df = self._dl.taiwan_stock_info()
+            df = self._fetch_stock_info_df()
             if df is not None and not df.empty:
                 for _, row in df.iterrows():
                     sid = str(row.get("stock_id", ""))
@@ -302,7 +335,36 @@ class TWDataFetcher:
                 _CACHE_LOADED = True
                 logger.info(f"TWDataFetcher: Loaded {len(_STOCK_NAME_CACHE)} stock names.")
         except Exception as e:
+            _CACHE_LOADED = True
             logger.warning(f"TWDataFetcher: Failed to load stock info: {e}")
+
+    def _fetch_stock_info_df(self) -> pd.DataFrame:
+        try:
+            params = {"dataset": "TaiwanStockInfo"}
+            if FINMIND_TOKEN:
+                params["token"] = FINMIND_TOKEN
+            resp = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=20)
+            resp.raise_for_status()
+            payload = resp.json()
+            data = payload.get("data", [])
+            if not data:
+                return pd.DataFrame()
+            return pd.DataFrame(data)
+        except Exception as e:
+            logger.error(f"_fetch_stock_info_df: {e}")
+            return pd.DataFrame()
+
+    def _lookup_name_from_yfinance(self, symbol: str) -> str:
+        for ticker_symbol in (f"{symbol}.TW", f"{symbol}.TWO"):
+            try:
+                ticker = yf.Ticker(ticker_symbol)
+                info = ticker.info or {}
+                name = info.get("shortName") or info.get("longName")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+            except Exception:
+                continue
+        return ""
 
     def _fetch_twse_quote(self, stock_id: str, market: str = "tse") -> Optional[dict]:
         """呼叫 TWSE MIS API 取得即時報價。"""
@@ -443,9 +505,10 @@ class TWDataFetcher:
         contract_map = {"TX": "TX", "MTX": "MTX", "TXF": "TX", "MXF": "MTX"}
         code = contract_map.get(symbol, symbol)
         try:
-            df = self._dl.taiwan_futures_daily(
+            raw = self._dl.taiwan_futures_daily(
                 futures_id=code, start_date=start, end_date=end
             )
+            df = self._coerce_finmind_df(raw)
             if df is None or df.empty:
                 return pd.DataFrame()
             df = df.rename(columns={"max": "high", "min": "low"})
@@ -459,6 +522,72 @@ class TWDataFetcher:
         except Exception as e:
             logger.error(f"_fetch_futures_klines({symbol}): {e}")
             return pd.DataFrame()
+
+    def _fetch_taiex_klines(self, start: str, end: str) -> pd.DataFrame:
+        try:
+            ticker = yf.Ticker("^TWII")
+            df = ticker.history(start=start, end=(pd.to_datetime(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+            if df is None or df.empty:
+                return pd.DataFrame()
+            df = df.reset_index().rename(
+                columns={
+                    "Date": "date",
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
+                }
+            )
+            df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+            keep = [c for c in ["date", "open", "high", "low", "close", "volume"] if c in df.columns]
+            return df[keep]
+        except Exception as e:
+            logger.error(f"_fetch_taiex_klines: {e}")
+            return pd.DataFrame()
+
+    def _fetch_yfinance_stock_klines(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        candidates = [f"{symbol}.TW", f"{symbol}.TWO"]
+        for ticker_symbol in candidates:
+            try:
+                ticker = yf.Ticker(ticker_symbol)
+                df = ticker.history(start=start, end=(pd.to_datetime(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+                if df is None or df.empty:
+                    continue
+                df = df.reset_index().rename(
+                    columns={
+                        "Date": "date",
+                        "Open": "open",
+                        "High": "high",
+                        "Low": "low",
+                        "Close": "close",
+                        "Volume": "volume",
+                    }
+                )
+                df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+                keep = [c for c in ["date", "open", "high", "low", "close", "volume"] if c in df.columns]
+                logger.info(f"fetch_klines({symbol}): fallback to yfinance {ticker_symbol}")
+                return df[keep]
+            except Exception as e:
+                logger.debug(f"_fetch_yfinance_stock_klines({ticker_symbol}): {e}")
+        return pd.DataFrame()
+
+    @staticmethod
+    def _coerce_finmind_df(raw) -> pd.DataFrame:
+        if raw is None:
+            return pd.DataFrame()
+        if isinstance(raw, pd.DataFrame):
+            return raw
+        if isinstance(raw, dict):
+            data = raw.get("data")
+            if isinstance(data, pd.DataFrame):
+                return data
+            if isinstance(data, list):
+                return pd.DataFrame(data)
+            return pd.DataFrame()
+        if isinstance(raw, list):
+            return pd.DataFrame(raw)
+        return pd.DataFrame()
 
     @staticmethod
     def _safe_float(val) -> float:

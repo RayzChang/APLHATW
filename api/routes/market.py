@@ -93,11 +93,10 @@ async def get_market_index(request: Request):
         except Exception as e:
             logger.debug(f"market/index TWSE failed: {e}")
 
-        # ── 方案 B：FinMind 歷史 K 線 fallback ───────────────────────
+        # ── 方案 B：歷史加權指數 fallback（盤後/休市用）──────────────
         if not result:
             try:
-                from core.data.tw_data_fetcher import TWDataFetcher
-                fetcher = TWDataFetcher()
+                fetcher = request.app.state.fetcher
                 end = datetime.now().strftime("%Y-%m-%d")
                 start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
                 df = fetcher.fetch_klines("TAIEX", start, end)
@@ -113,10 +112,10 @@ async def get_market_index(request: Request):
                         "change": change,
                         "change_pct": change_pct,
                         "timestamp": str(latest["date"]),
-                        "source": "finmind_history",
+                        "source": "history_fallback",
                     }
             except Exception as e:
-                logger.error(f"market/index FinMind history fallback failed: {e}")
+                logger.error(f"market/index history fallback failed: {e}")
 
         if not result:
             result = {

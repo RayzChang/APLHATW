@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, Activity, BookOpen, ShieldAlert, Cpu, ChevronDown, ChevronUp, ExternalLink, Loader2, CheckCircle2, CircleDashed, Clock, History } from 'lucide-react';
+import { Search, Activity, BookOpen, ShieldAlert, Cpu, ChevronDown, ChevronUp, ExternalLink, Loader2, CheckCircle2, CircleDashed, Clock, History, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { analyzeSymbol } from '../api/analysis';
 import type { AnalysisResult } from '../types/analysis';
+import { AnalysisPdfReport } from '../features/stock-analysis/AnalysisPdfReport';
 
 interface AnalysisHistory {
     symbol: string;
@@ -29,6 +30,13 @@ const LOADING_STEPS = [
     "首席決策官決策"
 ];
 
+const MARKDOWN_COMPONENTS = {
+  strong: ({ node, ...props }: any) => <span className="font-bold text-[#f9fafb]" {...props} />,
+  ul: ({ node, ...props }: any) => <ul className="list-disc pl-5 my-2 marker:text-brand-primary" {...props} />,
+  li: ({ node, ...props }: any) => <li className="mb-1" {...props} />,
+  p: ({ node, ...props }: any) => <p className="mb-[8px]" {...props} />,
+};
+
 export function StockPicker() {
   const [symbol, setSymbol] = useState('');
   const [loading, setLoading] = useState(false);
@@ -39,7 +47,9 @@ export function StockPicker() {
   const [history, setHistory] = useState<AnalysisHistory[]>([]);
   const [loadingStep, setLoadingStep] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pdfReportRef = useRef<HTMLDivElement | null>(null);
   
   // Accordion states
   const [expandedReport, setExpandedReport] = useState<string | null>('technical');
@@ -126,6 +136,57 @@ export function StockPicker() {
       if (hours < 24) return `${hours} 小時前`;
       return new Date(ts).toLocaleDateString();
   };
+
+  const exportAnalysisPdf = async () => {
+      if (!result || !pdfReportRef.current) return;
+
+      setExportingPdf(true);
+
+      try {
+          const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+              import('html2canvas'),
+              import('jspdf'),
+          ]);
+
+          const canvas = await html2canvas(pdfReportRef.current, {
+              scale: 2,
+              useCORS: true,
+              backgroundColor: '#f8fafc',
+          });
+
+          const imageData = canvas.toDataURL('image/png');
+          const pdf = new jsPDF('p', 'mm', 'a4');
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          const imgWidth = pageWidth;
+          const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+          let heightLeft = imgHeight;
+          let position = 0;
+
+          pdf.addImage(imageData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+
+          while (heightLeft > 0) {
+              position = heightLeft - imgHeight;
+              pdf.addPage();
+              pdf.addImage(imageData, 'PNG', 0, position, imgWidth, imgHeight);
+              heightLeft -= pageHeight;
+          }
+
+          const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+          pdf.save(`AlphaTW-${result.symbol}-analysis-${timestamp}.pdf`);
+      } catch (err) {
+          console.error('匯出 PDF 失敗', err);
+          setError('PDF 匯出失敗，請稍後再試。');
+      } finally {
+          setExportingPdf(false);
+      }
+  };
+
+  const pdfGeneratedAt = result?.timestamp
+      ? new Date(result.timestamp).toLocaleString('zh-TW', { hour12: false })
+      : new Date().toLocaleString('zh-TW', { hour12: false });
 
   return (
     <div className="flex-1 overflow-auto bg-bg-main p-4 md:p-8">
@@ -366,14 +427,11 @@ export function StockPicker() {
                     </div>
                     {expandedReport === 'technical' ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
                   </button>
-                  <div className={`px-6 overflow-hidden transition-all duration-500 ease-in-out ${expandedReport === 'technical' ? 'max-h-[1000px] pb-6 opacity-100' : 'max-h-0 opacity-0'}`}>
-                        <div className="pt-4 border-t border-card-border text-text-muted text-sm leading-relaxed whitespace-pre-wrap">
+                  <div className={`px-6 transition-all duration-500 ease-in-out ${expandedReport === 'technical' ? 'max-h-[68vh] pb-6 opacity-100 overflow-y-auto' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                        <div className="pt-4 border-t border-card-border text-text-muted text-sm leading-relaxed whitespace-pre-wrap pr-2">
                             <ReactMarkdown
                                 components={{
-                                    strong: ({node, ...props}) => <span className="font-bold text-[#f9fafb]" {...props} />,
-                                    ul: ({node, ...props}) => <ul className="list-disc pl-5 my-2 marker:text-brand-primary" {...props} />,
-                                    li: ({node, ...props}) => <li className="mb-1" {...props} />,
-                                    p: ({node, ...props}) => <p className="mb-[8px]" {...props} />
+                                    ...MARKDOWN_COMPONENTS
                                 }}
                             >
                                 {result.technical_report}
@@ -398,14 +456,11 @@ export function StockPicker() {
                     </div>
                     {expandedReport === 'sentiment' ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
                   </button>
-                  <div className={`px-6 overflow-hidden transition-all duration-500 ease-in-out ${expandedReport === 'sentiment' ? 'max-h-[1000px] pb-6 opacity-100' : 'max-h-0 opacity-0'}`}>
-                        <div className="pt-4 border-t border-card-border text-text-muted text-sm leading-relaxed whitespace-pre-wrap">
+                  <div className={`px-6 transition-all duration-500 ease-in-out ${expandedReport === 'sentiment' ? 'max-h-[68vh] pb-6 opacity-100 overflow-y-auto' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                        <div className="pt-4 border-t border-card-border text-text-muted text-sm leading-relaxed whitespace-pre-wrap pr-2">
                             <ReactMarkdown
                                 components={{
-                                    strong: ({node, ...props}) => <span className="font-bold text-[#f9fafb]" {...props} />,
-                                    ul: ({node, ...props}) => <ul className="list-disc pl-5 my-2 marker:text-brand-primary" {...props} />,
-                                    li: ({node, ...props}) => <li className="mb-1" {...props} />,
-                                    p: ({node, ...props}) => <p className="mb-[8px]" {...props} />
+                                    ...MARKDOWN_COMPONENTS
                                 }}
                             >
                                 {result.sentiment_report}
@@ -430,14 +485,11 @@ export function StockPicker() {
                     </div>
                     {expandedReport === 'risk' ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
                   </button>
-                  <div className={`px-6 overflow-hidden transition-all duration-500 ease-in-out ${expandedReport === 'risk' ? 'max-h-[1000px] pb-6 opacity-100' : 'max-h-0 opacity-0'}`}>
-                        <div className="pt-4 border-t border-card-border text-text-muted text-sm leading-relaxed whitespace-pre-wrap">
+                  <div className={`px-6 transition-all duration-500 ease-in-out ${expandedReport === 'risk' ? 'max-h-[68vh] pb-6 opacity-100 overflow-y-auto' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                        <div className="pt-4 border-t border-card-border text-text-muted text-sm leading-relaxed whitespace-pre-wrap pr-2">
                             <ReactMarkdown
                                 components={{
-                                    strong: ({node, ...props}) => <span className="font-bold text-[#f9fafb]" {...props} />,
-                                    ul: ({node, ...props}) => <ul className="list-disc pl-5 my-2 marker:text-brand-primary" {...props} />,
-                                    li: ({node, ...props}) => <li className="mb-1" {...props} />,
-                                    p: ({node, ...props}) => <p className="mb-[8px]" {...props} />
+                                    ...MARKDOWN_COMPONENTS
                                 }}
                             >
                                 {result.risk_report}
@@ -454,6 +506,14 @@ export function StockPicker() {
                 >
                     <Search className="w-4 h-4" /> 重新分析其他標的
                 </button>
+                <button
+                  onClick={exportAnalysisPdf}
+                  disabled={exportingPdf}
+                  className="btn bg-brand-primary/15 border border-brand-primary/30 hover:bg-brand-primary/20 px-8 py-3 text-[12px] font-black uppercase text-white transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                    {exportingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    {exportingPdf ? 'PDF 產製中' : '匯出完整 PDF 報告'}
+                </button>
                 <button 
                   onClick={() => window.open(`https://tw.stock.yahoo.com/quote/${result.symbol}`, '_blank')}
                   className="btn bg-white/5 border border-white/10 hover:bg-white/10 px-8 py-3 text-[12px] font-black uppercase text-text-muted hover:text-white transition-all flex items-center gap-2"
@@ -464,6 +524,14 @@ export function StockPicker() {
 
           </div>
         )}
+
+        {result ? (
+          <div className="fixed left-[-99999px] top-0 pointer-events-none opacity-0">
+            <div ref={pdfReportRef}>
+              <AnalysisPdfReport result={result} generatedAt={pdfGeneratedAt} />
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -7,7 +7,7 @@ router = APIRouter()
 
 
 @router.get("/{symbol}")
-def get_klines(
+async def get_klines(
     symbol: str,
     request: Request,
     days: int = Query(180, ge=30, le=365),

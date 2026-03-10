@@ -52,6 +52,19 @@ class ExecutionEngine:
         )
 
     def _execute_buy(self, simulator, signal_data: dict, signal_id: str | None, stock_id: str, action: str, price: float) -> ExecutionResult:
+        can_trade, reason = simulator.can_open_new_position()
+        if not can_trade:
+            return ExecutionResult(
+                executed=False,
+                reason=reason,
+                shares=0,
+                cost=0,
+                remaining_cash=simulator.cash,
+                signal_id=signal_id,
+                stock_id=stock_id,
+                action=action,
+            )
+
         if stock_id in simulator.positions:
             return ExecutionResult(
                 executed=False,

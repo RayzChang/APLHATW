@@ -32,6 +32,13 @@ scan_state = {
     "stocks_screened": 0,
     "candidates_found": 0,
     "orders_placed": 0,
+    "no_trade_streak": 0,
+    "adaptive_mode": "STRICT",
+    "adaptive_thresholds": {
+        "min_confidence": 0.7,
+        "min_risk_reward": 1.5,
+        "max_position_pct": 20.0,
+    },
 }
 
 
@@ -41,12 +48,12 @@ async def get_portfolio_summary(request: Request):
 
 
 @router.post("/check_stops")
-def check_stops(request: Request):
+async def check_stops(request: Request):
     return v2_check_stops(request)
 
 
 @router.post("/toggle_auto_scan")
-def toggle_auto_scan():
+async def toggle_auto_scan():
     return v2_toggle_auto_scan()
 
 
@@ -56,7 +63,7 @@ async def run_analysis_cycle(background_tasks: BackgroundTasks):
 
 
 @router.post("/reset")
-def reset_simulation(request: Request):
+async def reset_simulation(request: Request):
     return v2_reset_simulation(request)
 
 
@@ -71,10 +78,10 @@ async def get_current_positions(request: Request):
 
 
 @router.get("/trades/export")
-def export_trades_csv(request: Request):
+async def export_trades_csv(request: Request):
     return v2_export_trades_csv(request)
 
 
 @router.get("/scan/status")
-async def get_scan_status():
-    return await v2_get_scan_status()
+async def get_scan_status(request: Request):
+    return await v2_get_scan_status(request)

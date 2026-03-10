@@ -143,7 +143,7 @@ async def get_trade_history(request: Request):
 
 
 @router.get("/trades/export")
-def export_trades_csv(request: Request):
+async def export_trades_csv(request: Request):
     simulator = request.app.state.simulator
 
     buf = io.StringIO()
@@ -182,14 +182,16 @@ def export_trades_csv(request: Request):
 
 
 @router.get("/scan/status")
-async def get_scan_status():
+async def get_scan_status(request: Request):
     from api.routes.simulation import scan_state
 
-    return dict(scan_state)
+    simulator = getattr(request.app.state, "simulator", None)
+    guardrails = simulator.get_guardrails_status() if simulator else {}
+    return {**dict(scan_state), "guardrails": guardrails}
 
 
 @router.post("/risk/check")
-def check_stops(request: Request):
+async def check_stops(request: Request):
     simulator = request.app.state.simulator
     fetcher = request.app.state.fetcher
 
@@ -210,7 +212,7 @@ def check_stops(request: Request):
 
 
 @router.post("/scan/toggle")
-def toggle_auto_scan():
+async def toggle_auto_scan():
     from api.routes.simulation import scan_state
 
     new_state = not scan_state.get("auto_scan_enabled", False)
@@ -240,12 +242,37 @@ async def run_analysis_cycle(background_tasks: BackgroundTasks):
     if scan_state["is_scanning"]:
         return {"status": "error", "message": "全市場掃描已在進行中"}
 
-    background_tasks.add_task(job_daily_market_scan)
+    background_tasks.add_task(job_daily_market_scan, True)
     return {"status": "started", "message": "分析循環已啟動"}
 
 
 @router.post("/reset")
-def reset_simulation(request: Request):
+async def reset_simulation(request: Request):
+    from api.routes.simulation import scan_state
+
     simulator = request.app.state.simulator
     simulator.reset(new_capital=simulator.initial_capital)
+    scan_state.update(
+        {
+            "is_scanning": False,
+            "current": 0,
+            "total": 0,
+            "message": "模擬帳戶已重置，自動交易已關閉",
+            "auto_scan_enabled": False,
+            "market_status": "WAITING",
+            "daily_api_cost_twd": 0.0,
+            "last_scan_time": None,
+            "last_scan_summary": "",
+            "stocks_screened": 0,
+            "candidates_found": 0,
+            "orders_placed": 0,
+            "no_trade_streak": 0,
+            "adaptive_mode": "STRICT",
+            "adaptive_thresholds": {
+                "min_confidence": 0.7,
+                "min_risk_reward": 1.5,
+                "max_position_pct": 20.0,
+            },
+        }
+    )
     return {"status": "ok", "message": "模擬帳戶已重置"}

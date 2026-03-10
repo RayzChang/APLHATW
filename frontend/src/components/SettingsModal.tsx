@@ -95,7 +95,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             // sync localStorage
             localStorage.setItem('sim_balance', balance);
             localStorage.setItem('user_watchlist', JSON.stringify(watchlist));
-            setBackendInfo(prev => prev ? { ...prev, initial_capital: newCapital, watchlist } : prev);
+            setBackendInfo(prev => prev ? { ...prev, initial_capital: newCapital, watchlist, line_notify_enabled: lineEnabled } : prev);
+            setTimeout(() => {
+                onClose();
+            }, 500);
         } catch (e: unknown) {
             const errMsg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '無法連線至後端';
             setSaveMsg({ ok: false, msg: errMsg });

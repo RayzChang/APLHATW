@@ -11,6 +11,8 @@ interface TradeHistoryPanelProps {
 export function TradeHistoryPanel({ trades, formatMoney, onExport }: TradeHistoryPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
+  const hasNumber = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
+
   return (
     <div className="panel overflow-hidden mb-6">
       <button onClick={() => setIsExpanded(!isExpanded)} className="w-full p-6 flex justify-between items-center hover:bg-white/5 transition-colors">
@@ -65,10 +67,10 @@ export function TradeHistoryPanel({ trades, formatMoney, onExport }: TradeHistor
                     <td className="px-4 py-3 text-right font-mono text-sm font-black text-text-main">{formatMoney(t.total_value || 0)}</td>
                     <td className="px-4 py-3 text-right font-mono text-[10px] text-text-muted">{formatMoney(t.fee || 0)}</td>
                     <td className="px-4 py-3 text-right font-mono text-sm font-bold">
-                      {t.profit !== undefined ? <span className={t.profit >= 0 ? 'text-danger' : 'text-success'}>{t.profit > 0 ? '+' : ''}{formatMoney(t.profit)}</span> : '---'}
+                      {hasNumber(t.profit) ? <span className={t.profit >= 0 ? 'text-danger' : 'text-success'}>{t.profit > 0 ? '+' : ''}{formatMoney(t.profit)}</span> : '---'}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-sm font-bold">
-                      {t.profit_pct !== undefined ? <span className={t.profit_pct >= 0 ? 'text-danger' : 'text-success'}>{t.profit_pct > 0 ? '+' : ''}{t.profit_pct.toFixed(2)}%</span> : '---'}
+                      {hasNumber(t.profit_pct) ? <span className={t.profit_pct >= 0 ? 'text-danger' : 'text-success'}>{t.profit_pct > 0 ? '+' : ''}{t.profit_pct.toFixed(2)}%</span> : '---'}
                     </td>
                   </tr>
                 ))

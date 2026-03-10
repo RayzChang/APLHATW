@@ -38,7 +38,6 @@ class AnalysisPipeline:
         current_price = float(context.quote.get("price", 0.0) or 0.0)
         if current_price <= 0 and context.stock_analysis:
             current_price = float(context.stock_analysis.close)
-
         technical_report = self.technical_agent.analyze_context(self._build_technical_payload(context))
         sentiment_report = self.sentiment_agent.analyze_context(self._build_sentiment_payload(context))
         risk_report = self.risk_agent.analyze_context(self._build_risk_payload(context))

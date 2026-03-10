@@ -47,8 +47,8 @@ export interface TradeRecord {
   price: number;
   total_value: number;
   fee: number;
-  profit?: number;
-  profit_pct?: number;
+  profit?: number | null;
+  profit_pct?: number | null;
 }
 
 export interface WatchlistQuote {
@@ -59,6 +59,15 @@ export interface WatchlistQuote {
   change_pct: number;
   volume: number;
   is_realtime: boolean;
+}
+
+export interface KlinePoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 export interface PortfolioResponse {
