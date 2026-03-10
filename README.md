@@ -373,6 +373,44 @@ cd frontend
 npm run build
 ```
 
+---
+
+## Windows 打包（給家人使用）
+
+目標：前後端整合成單一桌面程式（雙擊即可用，不需手動開後端/前端）。
+
+### 1. 先準備 API 金鑰
+
+把 `.env` 放在專案根目錄（會一起打包到安裝版）：
+- `GEMINI_API_KEY=...`
+- `FINMIND_TOKEN=...`
+- 其他你需要的通知設定
+
+### 2. 建置桌面執行檔
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
+```
+
+產物：
+- `dist/AlphaTW/AlphaTW.exe`
+
+說明：
+- 程式首次啟動會建立 `AppData\Roaming\AlphaTW`
+- 若該目錄沒有 `.env`，會自動從打包內容複製
+- 後續資料庫與狀態都寫在 `AppData\Roaming\AlphaTW`
+
+### 3. 產生安裝程式（可選）
+
+1. 安裝 [Inno Setup](https://jrsoftware.org/isinfo.php)
+2. 開啟 `packaging/AlphaTW.iss`
+3. 點 `Build`
+
+產物：
+- `dist-installer/AlphaTW-Setup.exe`
+
+把這個安裝檔給家人即可。
+
 補充：
 
 - 建議使用英文專案路徑，例如 `C:\Users\Admin\Desktop\Code\APLHATW`

@@ -5,10 +5,26 @@
 """
 
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+def _resolve_base_dir() -> Path:
+    explicit_home = os.getenv("ALPHATW_HOME")
+    if explicit_home:
+        return Path(explicit_home).resolve()
+
+    if getattr(sys, "frozen", False):
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            return (Path(appdata) / "AlphaTW").resolve()
+        return (Path.home() / "AlphaTW").resolve()
+
+    return Path(__file__).resolve().parent.parent
+
+
+BASE_DIR = _resolve_base_dir()
+BASE_DIR.mkdir(parents=True, exist_ok=True)
 load_dotenv(BASE_DIR / ".env")
 
 # === FinMind API ===

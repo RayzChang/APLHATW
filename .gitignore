@@ -22,3 +22,9 @@ diff_patch.txt
 diff_status.txt
 runtime_api.log
 runtime_api.err.log
+build/
+dist/
+dist-installer/
+*.spec
+reports/tuning/*.csv
+reports/tuning/*.md

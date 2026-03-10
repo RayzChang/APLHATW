@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -138,7 +139,17 @@ async def health():
     return {"status": "ok", "app": "台股交易推手 V2"}
 
 
-_frontend_dist = ROOT / "frontend" / "dist"
+def _resolve_frontend_dist() -> Path:
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            candidate = Path(meipass) / "frontend" / "dist"
+            if candidate.exists():
+                return candidate
+    return ROOT / "frontend" / "dist"
+
+
+_frontend_dist = _resolve_frontend_dist()
 if _frontend_dist.exists() and (_frontend_dist / "index.html").exists():
     app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
 
