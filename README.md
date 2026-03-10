@@ -61,6 +61,26 @@ python scripts/smoke_api.py
 python scripts/smoke_api.py http://127.0.0.1:8000
 ```
 
+### 策略調參流程（建議每週跑一次）
+
+若你要回答「策略是否真的優於大盤」，建議固定跑調參腳本：
+
+```bash
+python scripts/tune_backtest.py --days 90
+```
+
+全市場模式（較慢）：
+
+```bash
+python scripts/tune_backtest.py --full-market --days 90 --top 5
+```
+
+輸出位置：
+- `reports/tuning/tuning_*_latest.csv`
+- `reports/tuning/tuning_*_latest.md`
+
+這會把多組參數一次跑完，並按綜合分數排序（考慮報酬、相對 0050、回撤、勝率、盈虧比）。
+
 ---
 
 ## 目錄
