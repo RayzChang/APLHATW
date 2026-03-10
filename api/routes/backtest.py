@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
@@ -10,6 +13,7 @@ from core.backtest.portfolio_backtest import run_portfolio_backtest, run_full_ma
 from config.settings import DEFAULT_WATCHLIST, SIMULATION_INITIAL_BALANCE, BACKTEST_UNIVERSE
 
 router = APIRouter()
+_executor = ThreadPoolExecutor(max_workers=2)
 
 
 # ─── 策略回測（單一策略，多標的）─────────────────────────────────────────────
@@ -21,10 +25,14 @@ class BacktestRequest(BaseModel):
 
 
 @router.post("/run")
-def run_backtest_api(req: BacktestRequest, request: Request):
+async def run_backtest_api(req: BacktestRequest, request: Request):
     symbols = req.symbols or DEFAULT_WATCHLIST
     fetcher = getattr(request.app.state, "fetcher", None)
-    results = run_backtest(symbols, req.strategy_id, req.months, fetcher=fetcher)
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(
+        _executor,
+        lambda: run_backtest(symbols, req.strategy_id, req.months, fetcher=fetcher),
+    )
     return {
         "count": len(results),
         "results": [
@@ -79,7 +87,7 @@ def _backtest_response(result, days: int) -> dict:
 
 
 @router.post("/portfolio")
-def run_portfolio_backtest_api(req: PortfolioBacktestRequest, request: Request):
+async def run_portfolio_backtest_api(req: PortfolioBacktestRequest, request: Request):
     """
     執行投資組合回測。
 
@@ -97,21 +105,28 @@ def run_portfolio_backtest_api(req: PortfolioBacktestRequest, request: Request):
             detail="AI 全市場掃描正在下載市場資料，請等待掃描完成後（約 3–5 分鐘）再執行回測。"
         )
 
+    loop = asyncio.get_event_loop()
     if req.full_market:
-        result = run_full_market_backtest(
-            days=req.days,
-            initial_capital=initial_capital,
-            buy_score_threshold=req.buy_score_threshold,
-            fetcher=fetcher,
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: run_full_market_backtest(
+                days=req.days,
+                initial_capital=initial_capital,
+                buy_score_threshold=req.buy_score_threshold,
+                fetcher=fetcher,
+            ),
         )
     else:
         symbols = req.symbols or list(BACKTEST_UNIVERSE)
-        result  = run_portfolio_backtest(
-            symbols=symbols,
-            days=req.days,
-            initial_capital=initial_capital,
-            buy_score_threshold=req.buy_score_threshold,
-            fetcher=fetcher,
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: run_portfolio_backtest(
+                symbols=symbols,
+                days=req.days,
+                initial_capital=initial_capital,
+                buy_score_threshold=req.buy_score_threshold,
+                fetcher=fetcher,
+            ),
         )
 
     return _backtest_response(result, req.days)
