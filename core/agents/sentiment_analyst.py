@@ -98,3 +98,10 @@ Step 2：整理搜尋結果，輸出以下報告
         """
         logger.debug(f"SentimentAnalyst analyzing news for {symbol}...")
         return super().generate_response(prompt)
+
+    def analyze_context(self, context: dict) -> str:
+        return self.analyze(
+            context["symbol"],
+            context["name"],
+            context.get("news_items", []),
+        )

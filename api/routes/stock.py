@@ -6,6 +6,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Request, HTTPException
 
+from api.routes.analysis import _run_analysis
+
 _executor = ThreadPoolExecutor(max_workers=4)
 
 router = APIRouter()
@@ -18,8 +20,7 @@ async def analyze_stock_deep(stock_id: str, request: Request):
     loop = asyncio.get_event_loop()
     
     def _run_blocking():
-        orchestrator = request.app.state.orchestrator
-        return orchestrator.run_full_analysis(stock_id)
+        return _run_analysis(request, stock_id, False)
 
     try:
         result = await loop.run_in_executor(_executor, _run_blocking)

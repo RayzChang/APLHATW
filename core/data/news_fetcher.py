@@ -10,6 +10,7 @@ import time as time_mod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote_plus
 
 import feedparser
 from loguru import logger
@@ -148,7 +149,7 @@ class NewsFetcher:
         query = f"{name} {symbol} 台股"
         feed_url = (
             f"https://news.google.com/rss/search"
-            f"?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+            f"?q={quote_plus(query)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         )
         items: list[NewsItem] = []
         try:

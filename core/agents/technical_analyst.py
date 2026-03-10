@@ -67,14 +67,35 @@ RSI、MACD、均線(MA5/MA20/MA60)、
         """
         傳入技術面資料，請 Agent 進行分析
         """
+        serialized_data = self._to_json_safe(technical_data)
         prompt = f"""
         標的：{name} ({symbol})
         目前股價：{current_price}
         
         近期技術面數據：
-        {json.dumps(technical_data, indent=2, ensure_ascii=False)}
+        {json.dumps(serialized_data, indent=2, ensure_ascii=False)}
         
         請立刻給出你的專業技術分析報告。
         """
         logger.debug(f"TechnicalAnalyst analyzing {symbol}...")
         return super().generate_response(prompt)
+
+    def analyze_context(self, context: Dict[str, Any]) -> str:
+        return self.analyze(
+            context["symbol"],
+            context["name"],
+            context["current_price"],
+            context["technical_data"],
+        )
+
+    def _to_json_safe(self, value: Any):
+        if isinstance(value, dict):
+            return {str(k): self._to_json_safe(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._to_json_safe(v) for v in value]
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except Exception:
+                return str(value)
+        return value

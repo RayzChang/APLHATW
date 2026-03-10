@@ -85,3 +85,13 @@ class ChiefDecisionMakerAgent(BaseAgent):
         """
         logger.debug(f"ChiefDecisionMaker generating final JSON for {symbol}...")
         return super().generate_json(prompt)
+
+    def analyze_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        return self.analyze(
+            context["symbol"],
+            context["name"],
+            context["current_price"],
+            context["technical_report"],
+            context["sentiment_report"],
+            context["risk_report"],
+        )

@@ -11,3 +11,14 @@ logs/
 
 frontend/node_modules/
 frontend/dist/
+frontend/build_check.txt
+frontend/vite_build.log
+
+api_log.txt
+debug_output.txt
+debug_traceback.py
+diag_traceback.py
+diff_patch.txt
+diff_status.txt
+runtime_api.log
+runtime_api.err.log

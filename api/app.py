@@ -22,8 +22,15 @@ from loguru import logger
 
 from config.settings import SIMULATION_UNIVERSE
 from core.agents.orchestrator import TradingOrchestrator
+from core.analysis.analysis_context_builder import AnalysisContextBuilder
+from core.analysis.analysis_pipeline import AnalysisPipeline
 from core.data.tw_data_fetcher import TWDataFetcher
+from core.data_services.market_data_service import MarketDataService
+from core.data_services.news_service import NewsService
+from core.data_services.symbol_lookup_service import SymbolLookupService
+from core.decision.decision_engine import DecisionEngine
 from core.execution.simulator import TradeSimulator
+from core.screening.candidate_screening_service import CandidateScreeningService
 from core.strategy.screener import StockScreener
 
 _GLOBAL_APP_STATE = None
@@ -36,12 +43,28 @@ async def lifespan(app: FastAPI):
 
     app.state.simulator = TradeSimulator()
     app.state.fetcher = TWDataFetcher()
+    app.state.market_data_service = MarketDataService(app.state.fetcher)
+    app.state.news_service = NewsService()
+    app.state.symbol_lookup_service = SymbolLookupService(app.state.fetcher)
+    app.state.analysis_context_builder = AnalysisContextBuilder(
+        fetcher=app.state.fetcher,
+        market_data_service=app.state.market_data_service,
+        news_service=app.state.news_service,
+        symbol_lookup_service=app.state.symbol_lookup_service,
+    )
+    app.state.decision_engine = DecisionEngine()
+    app.state.analysis_pipeline = AnalysisPipeline(
+        app.state.analysis_context_builder,
+        decision_engine=app.state.decision_engine,
+    )
+    app.state.candidate_screening_service = CandidateScreeningService(app.state.fetcher)
     app.state.orchestrator = TradingOrchestrator(fetcher=app.state.fetcher)
     app.state.screener = StockScreener(data_fetcher=app.state.fetcher)
     app.state.watchlist = list(SIMULATION_UNIVERSE)
 
-    from core.scheduler import continuous_market_scan_loop
+    from core.scheduler import continuous_market_scan_loop, init_scheduler, shutdown_scheduler
 
+    init_scheduler()
     app.state.scan_loop_task = asyncio.create_task(continuous_market_scan_loop())
     logger.info("Continuous market scan loop task started.")
 
@@ -55,6 +78,7 @@ async def lifespan(app: FastAPI):
             await scan_loop_task
         except asyncio.CancelledError:
             logger.info("Continuous market scan loop stopped.")
+    shutdown_scheduler()
     app.state.simulator.save_state()
 
 
@@ -83,6 +107,7 @@ async def global_exception_handler(request, exc):
 
 
 from api.routes.analyze import router as analyze_router
+from api.routes.analysis import router as analysis_router
 from api.routes.backtest import router as backtest_router
 from api.routes.klines import router as klines_router
 from api.routes.market import router as market_router
@@ -91,12 +116,15 @@ from api.routes.screener import router as screener_router
 from api.routes.settings import router as settings_router
 from api.routes.simulation import router as sim_router
 from api.routes.stock import router as stock_router
+from api.routes.trading import router as trading_router
 from api.routes.watchlist import router as watchlist_router
 
 app.include_router(market_router, prefix="/api/market", tags=["Market"])
 app.include_router(sim_router, prefix="/api/simulation", tags=["Simulation"])
 app.include_router(stock_router, prefix="/api/stock", tags=["Stock"])
 app.include_router(analyze_router, prefix="/api/analyze", tags=["Analyze"])
+app.include_router(analysis_router, prefix="/api/analysis", tags=["Analysis"])
+app.include_router(trading_router, prefix="/api/trading", tags=["Trading"])
 app.include_router(screener_router, prefix="/api/screener", tags=["Screener"])
 app.include_router(backtest_router, prefix="/api/backtest", tags=["Backtest"])
 app.include_router(klines_router, prefix="/api/klines", tags=["Klines"])

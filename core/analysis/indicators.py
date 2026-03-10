@@ -228,3 +228,27 @@ def calc_buy_sell_score(row: pd.Series) -> int:
             score += 1
 
     return score
+
+
+def build_indicator_snapshot(row: pd.Series) -> dict:
+    """Return a normalized indicator snapshot for screening / analysis layers."""
+    return {
+        "rsi": float(row.get("rsi", 0) or 0),
+        "kd_k": float(row.get("kd_k", 0) or 0),
+        "kd_d": float(row.get("kd_d", 0) or 0),
+        "macd": float(row.get("macd", 0) or 0),
+        "macd_signal": float(row.get("macd_signal", 0) or 0),
+        "macd_hist": float(row.get("macd_hist", 0) or 0),
+        "ma5": float(row.get("ma5", 0) or 0),
+        "ma20": float(row.get("ma20", 0) or 0),
+        "ma60": float(row.get("ma60", 0) or 0),
+        "bb_upper": float(row.get("bb_upper", 0) or 0),
+        "bb_lower": float(row.get("bb_lower", 0) or 0),
+        "bb_pct": float(row.get("bb_pct", 0) or 0),
+        "atr": float(row.get("atr", 0) or 0),
+        "vol_ratio": float(row.get("vol_ratio", 0) or 0),
+        "volume": float(row.get("volume", 0) or 0),
+        "close": float(row.get("close", 0) or 0),
+        "high": float(row.get("high", 0) or 0),
+        "low": float(row.get("low", 0) or 0),
+    }

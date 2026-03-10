@@ -1,797 +1,279 @@
-import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp, RefreshCcw, Cpu, Clock, Search, ShoppingCart, Download } from 'lucide-react';
-import { PerformanceChart } from '../components/charts/PerformanceChart';
-import { BacktestSection } from '../components/BacktestSection';
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Loader2, RefreshCcw } from 'lucide-react';
+
 import api from '../api/axiosConfig';
+import { fetchScanStatus, fetchTradingPortfolio, fetchTradingPositions, fetchTradingTrades, fetchWatchlistQuotes, resetSimulation, runScanCycle, toggleAutoScan } from '../api/trading';
+import { BacktestSection } from '../components/BacktestSection';
+import { PerformanceChart } from '../components/charts/PerformanceChart';
+import { WatchlistPanel } from '../features/auto-trading/WatchlistPanel';
+import { PortfolioHero } from '../features/portfolio/PortfolioHero';
+import { PositionsTable } from '../features/portfolio/PositionsTable';
+import { TradeHistoryPanel } from '../features/portfolio/TradeHistoryPanel';
+import type { PortfolioResponse, PositionItem, ScanState, TradeRecord, WatchlistQuote } from '../types/trading';
 
-interface PortfolioSummary {
-    total_assets: number;
-    cash: number;
-    total_profit: number;
-    total_profit_pct: number;
-    equity_curve?: Array<{
-        date: string;
-        equity: number;
-        benchmark: number;
-    }>;
-}
-
-interface PositionItem {
-    stock_id: string;
-    name: string;
-    shares: number;
-    avg_cost: number;
-    current_price: number;
-    profit: number;
-    profit_pct: number;
-    stop_loss_price: number | null;
-    take_profit_price: number | null;
-    status?: '保本啟動' | '追蹤止損中' | '正常';
-    break_even_price?: number;
-    hold_days?: number;
-}
-
-interface TradeRecord {
-    timestamp: string;
-    action: string;
-    stock_id: string;
-    stock_name?: string;
-    shares: number;
-    price: number;
-    total_value: number;
-    fee: number;
-    profit?: number;
-    profit_pct?: number;
-}
+const DEFAULT_SCAN_STATE: ScanState = {
+  is_scanning: false,
+  current: 0,
+  total: 0,
+  message: '待機中',
+  auto_scan_enabled: false,
+  market_status: 'WAITING',
+  daily_api_cost_twd: 0,
+  last_scan_time: null,
+  last_scan_summary: '',
+  stocks_screened: 0,
+  candidates_found: 0,
+  orders_placed: 0,
+};
 
 export function Dashboard() {
-    // Portfolio States
-    const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
-    const [positions, setPositions] = useState<PositionItem[]>([]);
-    const [trades, setTrades] = useState<TradeRecord[]>([]);
-    const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(true);
-    const [isTradesExpanded, setIsTradesExpanded] = useState(true);
+  const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
+  const [positions, setPositions] = useState<PositionItem[]>([]);
+  const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [watchlist, setWatchlist] = useState<WatchlistQuote[]>([]);
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>(['2330', '2317', '2454', '2412', '0050', '6415']);
+  const [scanState, setScanState] = useState<ScanState>(DEFAULT_SCAN_STATE);
+  const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(true);
+  const [isWatchlistLoading, setIsWatchlistLoading] = useState(true);
 
-    // Real-time watchlist state
-    const [watchlist, setWatchlist] = useState<Array<{
-        symbol: string; name: string; price: number;
-        change: number; change_pct: number; volume: number; is_realtime: boolean;
-    }>>([]);
-    const [isWatchlistLoading, setIsWatchlistLoading] = useState(true);
-    const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>(['2330', '2317', '2454', '2412', '0050', '6415']);
+  const formatMoney = useCallback(
+    (val: number) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(val),
+    [],
+  );
 
-    const fetchSettings = useCallback(async () => {
-        try {
-            const res = await api.get('/api/settings');
-            if (Array.isArray(res.data?.watchlist) && res.data.watchlist.length > 0) {
-                setWatchlistSymbols(res.data.watchlist);
-            }
-        } catch (e) {
-            console.error('Settings fetch failed:', e);
+  const fetchSettings = useCallback(async () => {
+    try {
+      const res = await api.get('/api/settings');
+      if (Array.isArray(res.data?.watchlist) && res.data.watchlist.length > 0) {
+        setWatchlistSymbols(res.data.watchlist);
+      }
+    } catch (error) {
+      console.error('Settings fetch failed:', error);
+    }
+  }, []);
+
+  const refreshScanStatus = useCallback(async () => {
+    try {
+      const data = await fetchScanStatus();
+      setScanState((prev) => ({ ...prev, ...data }));
+      return data.is_scanning;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const refreshPortfolioData = useCallback(async () => {
+    setIsLoadingPortfolio(true);
+    try {
+      const [portfolioData, positionsData, tradesData] = await Promise.all([
+        fetchTradingPortfolio(),
+        fetchTradingPositions(),
+        fetchTradingTrades(),
+      ]);
+      setPortfolio(portfolioData);
+      setPositions(positionsData || []);
+      setTrades(tradesData || []);
+      if (portfolioData.scan_state) {
+        setScanState((prev) => ({ ...prev, ...portfolioData.scan_state! }));
+      }
+    } catch (error) {
+      console.error('Failed to refresh dashboard:', error);
+    } finally {
+      setIsLoadingPortfolio(false);
+    }
+  }, []);
+
+  const refreshWatchlist = useCallback(async () => {
+    if (watchlistSymbols.length === 0) {
+      setWatchlist([]);
+      setIsWatchlistLoading(false);
+      return;
+    }
+
+    setIsWatchlistLoading(true);
+    try {
+      const items = await fetchWatchlistQuotes(watchlistSymbols);
+      setWatchlist(items);
+    } catch (error) {
+      console.error('Watchlist fetch failed:', error);
+    } finally {
+      setIsWatchlistLoading(false);
+    }
+  }, [watchlistSymbols]);
+
+  useEffect(() => {
+    fetchSettings();
+    refreshPortfolioData();
+    refreshScanStatus();
+  }, [fetchSettings, refreshPortfolioData, refreshScanStatus]);
+
+  useEffect(() => {
+    refreshWatchlist();
+    const interval = setInterval(refreshWatchlist, 60000);
+    return () => clearInterval(interval);
+  }, [refreshWatchlist]);
+
+  useEffect(() => {
+    const interval = setInterval(refreshPortfolioData, 30000);
+    return () => clearInterval(interval);
+  }, [refreshPortfolioData]);
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+
+    if (scanState.is_scanning) {
+      interval = setInterval(async () => {
+        const stillScanning = await refreshScanStatus();
+        if (!stillScanning) {
+          refreshPortfolioData();
         }
-    }, []);
+      }, 1000);
+    }
 
-    const fetchWatchlist = useCallback(async () => {
-        if (watchlistSymbols.length === 0) {
-            setWatchlist([]);
-            setIsWatchlistLoading(false);
-            return;
-        }
-
-        setIsWatchlistLoading(true);
-        try {
-            const results = await Promise.allSettled(
-                watchlistSymbols.map(sym => api.get(`/api/stock/quote/${sym}`))
-            );
-            const items = results
-                .map((r, i) => {
-                    if (r.status === 'fulfilled') {
-                        const d = r.value.data;
-                        return {
-                            symbol: watchlistSymbols[i],
-                            name: d.name || watchlistSymbols[i],
-                            price: d.price || 0,
-                            change: d.change || 0,
-                            change_pct: d.change_pct || 0,
-                            volume: Math.round((d.volume || 0) / 1000),
-                            is_realtime: d.is_realtime !== false,
-                        };
-                    }
-                    return null;
-                })
-                .filter(Boolean) as typeof watchlist;
-            setWatchlist(items);
-        } catch (e) {
-            console.error('Watchlist fetch failed:', e);
-        } finally {
-            setIsWatchlistLoading(false);
-        }
-    }, [watchlistSymbols]);
-
-    // Market Scan State (擴充欄位)
-    const [scanState, setScanState] = useState({
-        is_scanning: false,
-        current: 0,
-        total: 0,
-        message: '',
-        last_scan_time: null as string | null,
-        last_scan_summary: '',
-        last_scan_ago: null as string | null,
-        stocks_screened: 0,
-        candidates_found: 0,
-        orders_placed: 0,
-        next_scan_info: '每個交易日 09:10 及 12:30 自動執行',
-        // --- 無間斷掃描擴充 ---
-        auto_scan_enabled: false,
-        market_status: 'WAITING',
-        daily_api_cost_twd: 0.0,
-    });
-
-    const checkScanStatus = async () => {
-        try {
-            const res = await api.get('/api/simulation/scan/status');
-            // 使用 spread 安全合併，避免覆蓋 undefined 欄位
-            setScanState(prev => ({ ...prev, ...res.data }));
-            return res.data.is_scanning as boolean;
-        } catch (e) {
-            return false;
-        }
+    return () => {
+      if (interval) clearInterval(interval);
     };
+  }, [scanState.is_scanning, refreshPortfolioData, refreshScanStatus]);
 
-    // 初始化時讀取一次掃描狀態
-    useEffect(() => {
-        checkScanStatus();
-    }, []);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!scanState.is_scanning) {
+        refreshScanStatus();
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [scanState.is_scanning, refreshScanStatus]);
 
-    // 掃描中：每秒輪詢一次
-    useEffect(() => {
-        let interval: ReturnType<typeof setInterval>;
-        if (scanState.is_scanning) {
-            interval = setInterval(async () => {
-                const isStillScanning = await checkScanStatus();
-                if (!isStillScanning) {
-                    refreshAllData();
-                }
-            }, 1000);
-        }
-        return () => clearInterval(interval);
-    }, [scanState.is_scanning]);
+  const handleRunScan = useCallback(async () => {
+    try {
+      await runScanCycle();
+      setScanState((prev) => ({ ...prev, is_scanning: true, message: '準備啟動全市場掃描...' }));
+    } catch {
+      alert('啟動失敗，請確認後端是否正在運行中！');
+    }
+  }, []);
 
-    // 非掃描中：每 60 秒輕量輪詢，讓「上次掃描時間」保持最新
-    useEffect(() => {
-        const interval = setInterval(() => {
-            if (!scanState.is_scanning) {
-                checkScanStatus();
-            }
-        }, 60_000);
-        return () => clearInterval(interval);
-    }, [scanState.is_scanning]);
+  const handleToggleAutoScan = useCallback(async () => {
+    try {
+      const data = await toggleAutoScan();
+      setScanState((prev) => ({ ...prev, auto_scan_enabled: data.auto_scan_enabled }));
+      refreshScanStatus();
+    } catch {
+      alert('切換失敗，請確認後端是否正在運行中！');
+    }
+  }, [refreshScanStatus]);
 
+  const handleReset = useCallback(async () => {
+    if (!confirm('確定要重置所有模擬交易紀錄嗎？此動作無法復原！')) return;
+    try {
+      await resetSimulation();
+      alert('模擬交易庫存與資金已重置！');
+      refreshPortfolioData();
+    } catch {
+      alert('重置失敗！');
+    }
+  }, [refreshPortfolioData]);
 
-    const handleScan = async () => {
-        try {
-            const res = await api.post('/api/simulation/run_cycle');
-            if (res.status === 200 || res.status === 202) {
-                setScanState(prev => ({ ...prev, is_scanning: true, message: '準備啟動全市場掃描...' }));
-            }
-        } catch (e) {
-            alert('啟動失敗，請確認後端是否正在運行中！');
-        }
-    };
+  const handleExportCSV = useCallback(() => {
+    const link = document.createElement('a');
+    link.href = '/api/trading/trades/export';
+    link.download = 'AlphaTW_trades.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, []);
 
-    const handleToggleAutoScan = async () => {
-        try {
-            const res = await api.post('/api/simulation/toggle_auto_scan');
-            if (res.status === 200) {
-                setScanState(prev => ({ 
-                    ...prev, 
-                    auto_scan_enabled: res.data.auto_scan_enabled 
-                }));
-                checkScanStatus(); // 立即刷新狀態
-            }
-        } catch (e) {
-            alert('切換失敗，請確認後端是否正在運行中！');
-        }
-    };
+  const latestTrades = useMemo(() => trades.slice().reverse().slice(0, 20), [trades]);
 
-    const handleExportCSV = () => {
-        const link = document.createElement('a');
-        link.href = '/api/simulation/trades/export';
-        link.download = 'AlphaTW_trades.csv';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    };
+  return (
+    <div className="max-w-[1400px] mx-auto px-6 py-6 md:py-8 space-y-6 animate-in fade-in duration-700 pb-12">
+      <PortfolioHero
+        portfolio={portfolio}
+        scanState={scanState}
+        isLoading={isLoadingPortfolio}
+        onRefresh={refreshPortfolioData}
+        onToggleAutoScan={handleToggleAutoScan}
+        onRunScan={handleRunScan}
+        onReset={handleReset}
+      />
 
-    const handleReset = async () => {
-        if (!confirm('確定要重置所有模擬交易紀錄嗎？此動作無法復原！')) return;
-        try {
-            const res = await api.post('/api/simulation/reset');
-            if (res.status === 200) {
-                alert('模擬交易庫存與資金已重置！');
-                refreshAllData();
-            }
-        } catch (e) {
-            alert('重置失敗！');
-        }
-    };
+      <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.95fr] gap-6 items-stretch">
+        <div className="panel p-4 md:p-5 space-y-4 min-h-[420px]">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-black uppercase tracking-widest">資產曲線與交易節奏</h3>
+            <button onClick={refreshPortfolioData} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+              <RefreshCcw className={`w-3.5 h-3.5 text-text-muted ${isLoadingPortfolio ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
 
-    
-    const fetchPortfolio = async () => {
-        try {
-            const res = await api.get('/api/simulation/portfolio');
-            setPortfolio(res.data);
-        } catch (error) {
-            console.error('Failed to fetch portfolio:', error);
-        }
-    };
+          <div className="bg-black/20 rounded-xl p-4 border border-white/5 h-[260px]">
+            <PerformanceChart
+              data={portfolio?.equity_curve || []}
+              totalProfitPct={portfolio?.total_profit_pct || 0}
+            />
+          </div>
 
-    const fetchPositions = async () => {
-        try {
-            const res = await api.get('/api/simulation/positions');
-            setPositions(res.data || []);
-        } catch (error) {
-            console.error('Failed to fetch positions:', error);
-        }
-    };
-
-    const fetchTrades = async () => {
-        try {
-            const res = await api.get('/api/simulation/trades');
-            setTrades(res.data || []);
-        } catch (error) {
-            console.error('Failed to fetch trades:', error);
-        }
-    };
-
-    const refreshAllData = async () => {
-        setIsLoadingPortfolio(true);
-        await Promise.all([
-            fetchPortfolio(),
-            fetchPositions(),
-            fetchTrades()
-        ]);
-        setIsLoadingPortfolio(false);
-    };
-
-    useEffect(() => {
-        refreshAllData();
-        fetchSettings();
-        const interval = setInterval(refreshAllData, 30000); // Poll every 30s
-        return () => { clearInterval(interval); };
-    }, [fetchSettings]);
-
-    useEffect(() => {
-        fetchWatchlist();
-        const watchlistInterval = setInterval(fetchWatchlist, 60000); // Watchlist every 60s
-        return () => { clearInterval(watchlistInterval); };
-    }, [fetchWatchlist]);
-
-    // 格式化金錢
-    const formatMoney = (val: number) => {
-        return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(val);
-    };
-
-    const cashPct = (portfolio?.total_assets && portfolio.total_assets > 0)
-        ? ((portfolio.cash / portfolio.total_assets) * 100).toFixed(1) + '%'
-        : '－';
-
-    return (
-        <div className="max-w-[1400px] mx-auto px-6 py-6 md:py-8 space-y-6 animate-in fade-in duration-700 pb-12">
-
-            {/* SECTION 1: Top Stats Cards */}
-            <div className="panel bg-[#1a2035] flex flex-col md:flex-row items-stretch divide-y md:divide-y-0 md:divide-x divide-white/10">
-                <div className="flex-1 p-4 flex items-center gap-4">
-                    <div className="w-1.5 h-10 rounded-full bg-brand-primary"></div>
-                    <div>
-                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">💰 虛擬總資產</div>
-                        <div className="text-2xl font-black text-white font-mono tracking-tighter">
-                            {isLoadingPortfolio ? '---' : formatMoney(portfolio?.total_assets || 1000000)}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex-1 p-4 flex items-center gap-4">
-                    <div className="w-1.5 h-10 rounded-full bg-text-muted"></div>
-                    <div>
-                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">💵 可用現金</div>
-                        <div className="text-2xl font-black text-white font-mono tracking-tighter">
-                            {isLoadingPortfolio ? '---' : formatMoney(portfolio?.cash || 0)}
-                        </div>
-                        <div className="text-[10px] text-text-muted mt-0.5">
-                            佔總資產 {cashPct}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex-1 p-4 flex items-center gap-4">
-                    <div className="w-1.5 h-10 rounded-full bg-success"></div>
-                    <div>
-                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">📈 累積總獲利</div>
-                        <div className={`text-2xl font-black font-mono tracking-tighter ${(portfolio?.total_profit || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
-                            {(portfolio?.total_profit || 0) > 0 ? '+' : ''}{formatMoney(portfolio?.total_profit || 0)}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex-1 p-4 flex items-center gap-4">
-                    <div className="w-1.5 h-10 rounded-full bg-brand-primary"></div>
-                    <div>
-                        <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">🎯 綜合報酬率</div>
-                        <div className={`text-2xl font-black font-mono tracking-tighter ${(portfolio?.total_profit_pct || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
-                            {(portfolio?.total_profit_pct || 0).toFixed(2)}%
-                        </div>
-                    </div>
-                </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="bg-black/20 rounded-xl p-4 border border-white/5">
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">掃描摘要</div>
+              <div className="text-sm font-black text-white">{scanState.last_scan_summary || '尚未執行掃描'}</div>
             </div>
+            <div className="bg-black/20 rounded-xl p-4 border border-white/5">
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">已下單筆數</div>
+              <div className="text-2xl font-black font-mono text-brand-primary">{scanState.orders_placed}</div>
+            </div>
+            <div className="bg-black/20 rounded-xl p-4 border border-white/5">
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">候選股票數</div>
+              <div className="text-2xl font-black font-mono text-white">{scanState.candidates_found}</div>
+            </div>
+          </div>
 
-            {/* SECTION 2: Action Bar */}
-            <div className="panel p-3 px-5 flex flex-wrap items-center justify-between gap-4 border-brand-primary/20 bg-brand-primary/5">
-                <div className="flex flex-wrap items-center gap-4">
-                    <button onClick={refreshAllData} className="btn btn-secondary gap-2 px-4 py-2 text-sm">
-                        <RefreshCw className={`w-4 h-4 ${isLoadingPortfolio ? 'animate-spin' : ''}`} /> 刷新數據
-                    </button>
-
-                    {/* 無間斷掃描切換開關 */}
-                    <div className="flex items-center gap-3 px-4 py-1.5 bg-black/40 rounded-xl border border-white/10 ml-2">
-                        <span className="text-sm font-bold text-white flex items-center gap-2">
-                            <Bot className={`w-4 h-4 ${scanState.auto_scan_enabled ? 'text-brand-primary animate-pulse' : 'text-text-muted'}`} />
-                            全天候自動交易
+          <div className="bg-black/20 rounded-xl p-4 border border-white/5">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-black uppercase tracking-widest text-text-muted">近期成交快照</h4>
+              <span className="text-[10px] text-text-muted">最近 {latestTrades.length} 筆</span>
+            </div>
+            <div className="space-y-2 max-h-[210px] overflow-y-auto pr-1">
+              {latestTrades.length === 0 ? (
+                <div className="h-[120px] flex items-center justify-center text-text-muted text-sm">暫無交易紀錄</div>
+              ) : (
+                latestTrades.map((t, i) => (
+                  <div key={i} className="flex gap-3 p-2.5 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                    <div className="flex flex-col items-center shrink-0">
+                      <span className="text-[10px] font-mono text-text-muted">{new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <div className={`w-1 h-full mt-1 rounded-full ${t.action === 'BUY' ? 'bg-success' : 'bg-danger'}`}></div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between mb-0.5">
+                        <span className="text-sm font-black text-text-main">{t.stock_id}</span>
+                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${t.action === 'BUY' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger'}`}>
+                          {t.action}
                         </span>
-                        <button 
-                            onClick={handleToggleAutoScan}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 focus:ring-offset-gray-900 ${
-                                scanState.auto_scan_enabled ? 'bg-brand-primary' : 'bg-gray-600'
-                            }`}
-                        >
-                            <span
-                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                    scanState.auto_scan_enabled ? 'translate-x-6' : 'translate-x-1'
-                                }`}
-                            />
-                        </button>
+                      </div>
+                      <p className="text-xs text-text-muted truncate">執行{t.action === 'BUY' ? '買入' : '賣出'} {t.shares} 股，成交價 {t.price.toFixed(2)}</p>
                     </div>
-
-                    {scanState.is_scanning && !scanState.auto_scan_enabled ? (
-                        <div className="flex items-center gap-3 bg-black/40 px-4 py-2 rounded-xl border border-brand-primary/30 min-w-[350px]">
-                            <Loader2 className="w-4 h-4 text-brand-primary animate-spin shrink-0" />
-                            <div className="flex flex-col w-full">
-                                <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-brand-primary font-bold">{scanState.message}</span>
-                                    <span className="text-text-muted">{scanState.total > 0 ? `${Math.round((scanState.current / scanState.total) * 100)}%` : ''}</span>
-                                </div>
-                                {scanState.total > 0 && (
-                                    <div className="h-1 flex-1 bg-white/10 rounded-full overflow-hidden w-full">
-                                        <div 
-                                            className="h-full bg-brand-primary rounded-full transition-all duration-500 shadow-[0_0_10px_#6366f1]"
-                                            style={{ width: `${(scanState.current / scanState.total) * 100}%` }}
-                                        ></div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    ) : !scanState.auto_scan_enabled && (
-                        <div className="flex items-center gap-3">
-                            <button 
-                                onClick={handleScan}
-                                className="btn btn-primary glow-purple gap-2 px-6 py-2 bg-gradient-to-r from-brand-primary to-indigo-600 hover:scale-105 text-sm"
-                            >
-                                <Bot className="w-4 h-4" /> 執行單次 AI 分析
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                <div className="flex items-center gap-4">
-                    {scanState.auto_scan_enabled && (
-                        <div className="flex items-center gap-2 text-xs font-mono bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">
-                            <span className="text-text-muted">狀態:</span>
-                            <span className={`font-black uppercase tracking-wider ${
-                                scanState.market_status === 'OPEN' ? 'text-success animate-pulse' :
-                                scanState.market_status === 'WAITING' ? 'text-text-muted' : 'text-yellow-400'
-                            }`}>
-                                {scanState.market_status === 'OPEN' ? '開盤中-運作中' :
-                                 scanState.market_status === 'CLOSED' ? '已休市-待機中' : '等待連線...'}
-                            </span>
-                        </div>
-                    )}
-                    <button onClick={handleReset} className="btn btn-danger gap-2 px-4 py-2 text-sm">
-                        <RefreshCw className="w-4 h-4" /> 重置模擬
-                    </button>
-                </div>
+                  </div>
+                ))
+              )}
             </div>
-
-            {/* SECTION 2.5: AI 系統狀態說明 */}
-            <div className="panel p-5 border border-white/5 space-y-4">
-                {/* 標題 */}
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                        <Cpu className="w-4 h-4 text-brand-primary" />
-                        <h3 className="text-sm font-black uppercase tracking-widest">AI 自動交易系統說明</h3>
-                        <span className="text-[10px] text-text-muted font-normal ml-1">— 這個系統在做什麼？</span>
-                    </div>
-                    {/* API 花費預估 */}
-                    <div className="flex items-center gap-2 bg-black/30 px-3 py-1.5 rounded-lg border border-white/5">
-                        <span className="text-[10px] text-text-muted font-bold tracking-wider">今日 API 預估花費:</span>
-                        <span className="text-sm font-mono font-black text-warning">
-                            ${scanState.daily_api_cost_twd?.toFixed(1) || '0.0'} <span className="text-[10px]">TWD</span>
-                        </span>
-                    </div>
-                </div>
-
-                {/* 流程說明 */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
-                        <Search className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
-                        <div>
-                            <div className="text-xs font-black text-white mb-0.5">全市場自動掃描</div>
-                            <div className="text-[10px] text-text-muted leading-relaxed">
-                                開放「全天候自動交易」後，系統會在交易時間 (09:00 - 13:30) 內不斷掃描台股全市場。
-                                每次掃描完畢會進入 <span className="text-danger">15 分鐘冷卻</span> 避免消耗過多 API 額度。
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
-                        <Bot className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" />
-                        <div>
-                            <div className="text-xs font-black text-white mb-0.5">第二層：AI 四探員精析</div>
-                            <div className="text-[10px] text-text-muted leading-relaxed">
-                                對技術面突出的候選股執行四個 AI Agent 深度分析，
-                                只有信心度 ≥ 70% 且決策為 BUY 才實際下單。
-                                <span className="text-yellow-400/70"> 每筆分析約 $0.32 TWD。</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
-                        <ShoppingCart className="w-5 h-5 text-success shrink-0 mt-0.5" />
-                        <div>
-                            <div className="text-xs font-black text-white mb-0.5">持倉管理（全天候）</div>
-                            <div className="text-[10px] text-text-muted leading-relaxed">
-                                盤中每分鐘自動監控所有持倉，觸發停損（進場價 − 2×ATR）或停利（進場價 + 3×ATR）時立即出場，
-                                保護資金安全。收盤後將持倉帶到隔日。
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* 上次掃描狀態 */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-1 border-t border-white/5">
-                    <div className="flex flex-wrap items-center gap-4">
-                        {scanState.is_scanning && scanState.auto_scan_enabled && (
-                            <div className="flex items-center gap-2 text-[11px] bg-brand-primary/10 px-2 py-1 rounded">
-                                <Loader2 className="w-3.5 h-3.5 text-brand-primary animate-spin" />
-                                <span className="text-brand-primary font-bold">{scanState.message}</span>
-                            </div>
-                        )}
-                        {!scanState.is_scanning && scanState.auto_scan_enabled && scanState.market_status === 'OPEN' && (
-                            <div className="flex items-center gap-2 text-[11px] bg-warning/10 px-2 py-1 rounded">
-                                <Clock className="w-3.5 h-3.5 text-warning" />
-                                <span className="text-warning font-bold">{scanState.message || '冷卻中...'}</span>
-                            </div>
-                        )}
-                        <div className="flex items-center gap-2 text-[11px]">
-                            <Clock className="w-3.5 h-3.5 text-text-muted" />
-                            <span className="text-text-muted">上次完成：</span>
-                            <span className="text-white font-bold">
-                                {scanState.last_scan_ago
-                                    ? scanState.last_scan_ago
-                                    : scanState.last_scan_time
-                                        ? new Date(scanState.last_scan_time).toLocaleString('zh-TW')
-                                        : '尚未執行'
-                                }
-                            </span>
-                        </div>
-                        {scanState.stocks_screened > 0 && (
-                            <>
-                                <div className="flex items-center gap-2 text-[11px]">
-                                    <span className="text-text-muted">掃描股票：</span>
-                                    <span className="text-white font-black">{scanState.stocks_screened.toLocaleString()} 支</span>
-                                </div>
-                                <div className="flex items-center gap-2 text-[11px]">
-                                    <span className="text-text-muted">技術篩選：</span>
-                                    <span className="text-yellow-400 font-black">{scanState.candidates_found} 檔</span>
-                                </div>
-                                <div className="flex items-center gap-2 text-[11px]">
-                                    <span className="text-text-muted">AI 下單：</span>
-                                    <span className={`font-black ${scanState.orders_placed > 0 ? 'text-success' : 'text-text-muted'}`}>
-                                        {scanState.orders_placed} 筆
-                                    </span>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-            </div>
-
-            {/* SECTION 3: Split View 6:4 */}
-            <div className="flex flex-col lg:flex-row gap-6 items-stretch">
-                {/* Left: Performance Chart */}
-                <div className="w-full lg:w-[60%] panel p-6 h-[320px] flex flex-col">
-                    <div className="flex-1 w-full h-full relative">
-                        {!isLoadingPortfolio ? (
-                            <PerformanceChart 
-                                data={portfolio?.equity_curve || []} 
-                                totalProfitPct={portfolio?.total_profit_pct || 0}
-                            />
-                        ) : (
-                            <div className="h-full flex flex-col items-center justify-center text-text-muted gap-3">
-                                 <Loader2 className="w-10 h-10 animate-spin text-brand-primary" />
-                                 <span className="font-bold tracking-widest text-xs uppercase">分析引擎啟動中...</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Right: AI Logs & Watchlist */}
-                <div className="w-full lg:flex-1 flex flex-col gap-4">
-                    {/* Top Right: AI Logs */}
-                    <div className="panel p-4 flex-1 flex flex-col min-h-0">
-                        <div className="flex justify-between items-center mb-3">
-                            <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
-                                <Bot className="w-4 h-4 text-brand-primary" /> AI 決策日誌
-                            </h3>
-                            <span className="bg-brand-primary text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
-                                {trades.length}
-                            </span>
-                        </div>
-                        <div className="flex-1 overflow-y-auto pr-1 space-y-2">
-                            {trades.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center py-4 text-text-muted">
-                                    <Bot className="w-8 h-8 opacity-20 mb-2" />
-                                    <span className="text-sm font-bold">等待AI執行分析...</span>
-                                    <span className="text-[10px] opacity-70">點擊執行AI交易分析開始</span>
-                                </div>
-                            ) : (
-                                trades.slice().reverse().slice(0, 20).map((t, i) => (
-                                    <div key={i} className="flex gap-3 p-2.5 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
-                                        <div className="flex flex-col items-center shrink-0">
-                                            <span className="text-[10px] font-mono text-text-muted">{new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                                            <div className={`w-1 h-full mt-1 rounded-full ${
-                                                t.action === 'BUY' ? 'bg-success' : t.action === 'SELL' ? 'bg-danger' : 'bg-gray-500'
-                                            }`}></div>
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex justify-between mb-0.5">
-                                                <span className="text-sm font-black text-text-main">{t.stock_id}</span>
-                                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
-                                                    t.action === 'BUY' ? 'bg-success/20 text-success' : 
-                                                    t.action === 'SELL' ? 'bg-danger/20 text-danger' : 'bg-white/10 text-text-muted'
-                                                }`}>
-                                                    {t.action}
-                                                </span>
-                                            </div>
-                                            <p className="text-xs text-text-muted truncate">
-                                                執行{t.action === 'BUY' ? '買入' : '賣出'} {t.shares} 股，成交價 {t.price.toFixed(2)}
-                                            </p>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Bottom Right: Real-time Watchlist */}
-                    <div className="panel p-4 flex-1 flex flex-col min-h-0">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
-                                <TrendingUp className="w-4 h-4 text-brand-primary" /> 即時觀察清單
-                            </h3>
-                            <button onClick={fetchWatchlist} disabled={isWatchlistLoading} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
-                                <RefreshCcw className={`w-3.5 h-3.5 text-text-muted ${isWatchlistLoading ? 'animate-spin' : ''}`} />
-                            </button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto pr-1 space-y-1">
-                            {isWatchlistLoading && watchlist.length === 0 ? (
-                                <div className="h-full flex items-center justify-center">
-                                    <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
-                                </div>
-                            ) : watchlist.map((item, i) => (
-                                <div key={i} className="flex items-center justify-between p-2 hover:bg-white/5 rounded-lg transition-colors">
-                                    <div className="flex flex-col w-[28%] shrink-0">
-                                        <div className="flex items-center gap-1">
-                                            <span className="text-xs font-black text-text-main">{item.symbol}</span>
-                                            {!item.is_realtime && (
-                                                <span className="text-[8px] bg-text-muted/20 text-text-muted px-1 rounded leading-none">收盤</span>
-                                            )}
-                                        </div>
-                                        <span className="text-[10px] text-text-muted truncate">{item.name}</span>
-                                    </div>
-                                    <div className="text-right flex flex-col w-[28%] shrink-0">
-                                        <span className="text-xs font-mono font-bold">{item.price.toLocaleString()}</span>
-                                        <span className={`text-[10px] font-mono font-bold ${item.change_pct >= 0 ? 'text-danger' : 'text-success'}`}>
-                                            {item.change_pct >= 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
-                                        </span>
-                                    </div>
-                                    <div className="text-right flex flex-col w-[22%] shrink-0">
-                                        <span className="text-xs font-mono font-bold">{(item.volume || 0).toLocaleString()}</span>
-                                        <span className="text-[10px] text-text-muted">張</span>
-                                    </div>
-                                    <div className="flex flex-col items-end gap-1 w-[22%] shrink-0">
-                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded leading-none ${
-                                            item.change_pct > 3 ? 'bg-danger/20 text-danger' :
-                                            item.change_pct < -3 ? 'bg-success/20 text-success' :
-                                            item.change_pct > 0 ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'
-                                        }`}>
-                                            {item.change_pct > 3 ? '強勢' : item.change_pct < -3 ? '弱勢' : item.change_pct > 0 ? '上漲' : '下跌'}
-                                        </span>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* SECTION 4: Positions Table */}
-            <div className="panel overflow-hidden">
-                <div className="p-6 border-b border-card-border flex justify-between items-center">
-                    <h3 className="text-lg font-black tracking-tight flex items-center gap-2">
-                        <span className="bg-brand-primary w-1 h-5 rounded-full inline-block"></span>
-                        當前持倉庫存
-                    </h3>
-                </div>
-                <div className="overflow-x-auto w-full">
-                    <table className="w-full text-left table-fixed min-w-[1000px]">
-                        <thead>
-                            <tr className="bg-white/5 text-[10px] font-bold text-text-muted uppercase tracking-widest">
-                                <th className="px-4 py-3 w-[12%]">標的</th>
-                                <th className="px-4 py-3 w-[8%] text-right">持有股數</th>
-                                <th className="px-4 py-3 w-[8%] text-right">均價</th>
-                                <th className="px-4 py-3 w-[8%] text-right">現價</th>
-                                <th className="px-4 py-3 w-[10%] text-right">防護網(止損)</th>
-                                <th className="px-4 py-3 w-[9%] text-right">止盈價</th>
-                                <th className="px-4 py-3 w-[9%] text-right">保本價</th>
-                                <th className="px-4 py-3 w-[10%] text-right">未實現損益</th>
-                                <th className="px-4 py-3 w-[8%] text-right">損益%</th>
-                                <th className="px-4 py-3 w-[8%] text-right">持倉天數</th>
-                                <th className="px-4 py-3 w-[10%] text-center">狀態</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5">
-                            {isLoadingPortfolio ? (
-                                <tr><td colSpan={11} className="text-center py-6 text-text-muted italic"><Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" /> 帳戶數據對接中...</td></tr>
-                            ) : positions.length === 0 ? (
-                                <tr>
-                                    <td colSpan={11} className="text-center py-6 text-text-muted text-sm border-0">
-                                        <div className="flex items-center justify-center gap-2 opacity-50">
-                                            <Bot className="w-4 h-4" />
-                                            <span className="font-bold tracking-widest uppercase">目前無任何倉位，等待 AI 建立部位</span>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ) : (
-                                positions.map((p, idx) => (
-                                    <tr key={`${p.stock_id}-${idx}`} className="hover:bg-brand-primary/5 transition-colors group">
-                                        <td className="px-4 py-4">
-                                            <div className="font-black text-text-main group-hover:text-brand-primary transition-colors text-sm">{p.stock_id}</div>
-                                            <div className="text-[10px] text-text-muted font-bold truncate">{p.name || '台股標的'}</div>
-                                        </td>
-                                        <td className="px-4 py-4 text-right font-mono text-sm font-bold">{(p.shares || 0).toLocaleString()}</td>
-                                        <td className="px-4 py-4 text-right font-mono text-sm">{(p.avg_cost || 0).toFixed(2)}</td>
-                                        <td className="px-4 py-4 text-right font-mono text-sm font-black text-text-main">{(p.current_price || 0).toFixed(2)}</td>
-                                        <td className="px-4 py-4 text-right font-mono text-xs text-danger font-bold">{p.stop_loss_price?.toFixed(2) || '---'}</td>
-                                        <td className="px-4 py-4 text-right font-mono text-xs text-brand-primary font-bold">{p.take_profit_price?.toFixed(2) || '---'}</td>
-                                        <td className="px-4 py-4 text-right font-mono text-xs font-bold text-text-muted">{p.break_even_price?.toFixed(2) || '---'}</td>
-                                        <td className="px-4 py-4 text-right font-mono">
-                                            <div className={`text-sm font-black ${(p.profit || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
-                                                {(p.profit || 0) > 0 ? '+' : ''}{formatMoney(p.profit || 0)}
-                                            </div>
-                                        </td>
-                                        <td className="px-4 py-4 text-right font-mono text-sm font-bold">
-                                            <span className={`${(p.profit_pct || 0) >= 0 ? 'text-danger' : 'text-success'}`}>
-                                                {(p.profit_pct || 0) > 0 ? '+' : ''}{(p.profit_pct || 0).toFixed(2)}%
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-4 text-right font-mono text-xs text-text-muted">{p.hold_days !== undefined ? `${p.hold_days}天` : '---'}</td>
-                                        <td className="px-4 py-4 text-center">
-                                            <span className={`inline-block px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest leading-none ${
-                                                p.profit_pct > 2 ? 'bg-brand-primary/20 text-brand-primary' :
-                                                p.profit_pct < -2 ? 'bg-danger/20 text-danger' : 'bg-white/10 text-text-muted'
-                                            }`}>
-                                                {p.status || (p.profit_pct > 5 ? '追蹤止損中' : p.profit_pct > 2 ? '保本啟動' : '正常')}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            {/* SECTION 5: Backtest Section */}
-            <BacktestSection isScanRunning={scanState.is_scanning} />
-
-            {/* SECTION 6: Trade History Collapsible */}
-            <div className="panel overflow-hidden mb-6">
-                <button 
-                    onClick={() => setIsTradesExpanded(!isTradesExpanded)}
-                    className="w-full p-6 flex justify-between items-center hover:bg-white/5 transition-colors"
-                >
-                    <h3 className="text-lg font-black tracking-tight flex items-center gap-2">
-                        <span className="bg-text-muted w-1 h-5 rounded-full inline-block"></span>
-                        歷史交易紀錄
-                    </h3>
-                    <div className="flex items-center gap-3">
-                        {trades.length > 0 && (
-                            <button
-                                onClick={(e) => { e.stopPropagation(); handleExportCSV(); }}
-                                className="btn btn-secondary gap-1.5 px-3 py-1.5 text-[11px]"
-                            >
-                                <Download className="w-3.5 h-3.5" /> 匯出 CSV
-                            </button>
-                        )}
-                        <span className="text-xs text-text-muted font-bold">近期 {trades.length} 筆</span>
-                        {isTradesExpanded ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
-                    </div>
-                </button>
-                
-                {isTradesExpanded && (
-                    <div className="overflow-x-auto w-full border-t border-card-border animate-in slide-in-from-top duration-300">
-                        <table className="w-full text-left table-fixed min-w-[1000px]">
-                            <thead>
-                                <tr className="bg-white/5 text-[10px] font-bold text-text-muted uppercase tracking-widest">
-                                    <th className="px-4 py-3 w-[8%]">時間</th>
-                                    <th className="px-4 py-3 w-[8%] text-center">操作</th>
-                                    <th className="px-4 py-3 w-[10%]">股票代碼</th>
-                                    <th className="px-4 py-3 w-[12%]">股票名稱</th>
-                                    <th className="px-4 py-3 w-[10%] text-right">股數</th>
-                                    <th className="px-4 py-3 w-[10%] text-right">成交價</th>
-                                    <th className="px-4 py-3 w-[12%] text-right">總額</th>
-                                    <th className="px-4 py-3 w-[10%] text-right">手續費</th>
-                                    <th className="px-4 py-3 w-[10%] text-right">損益</th>
-                                    <th className="px-4 py-3 w-[10%] text-right">損益%</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/5">
-                                {trades.length === 0 ? (
-                                    <tr><td colSpan={10} className="text-center py-0 h-[80px] text-text-muted italic text-sm border-0">暫無交易紀錄</td></tr>
-                                ) : (
-                                    trades.slice().reverse().map((t, i) => (
-                                        <tr key={i} className={`group hover:bg-white/5 transition-colors border-l-4 ${
-                                            t.action === 'BUY' ? 'border-l-success' : 'border-l-danger'
-                                        }`}>
-                                            <td className="px-4 py-3 text-xs text-text-muted font-mono">
-                                                {t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--'}
-                                            </td>
-                                            <td className="px-4 py-3 text-center">
-                                                <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest ${
-                                                    t.action === 'BUY' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger'
-                                                }`}>
-                                                    {t.action === 'BUY' ? '買入' : '賣出'}
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3 font-black text-text-main text-sm">{t.stock_id}</td>
-                                            <td className="px-4 py-3 text-[10px] text-text-muted truncate">{t.stock_name || '台股標的'}</td>
-                                            <td className="px-4 py-3 text-right font-mono text-sm">{(t.shares || 0).toLocaleString()}</td>
-                                            <td className="px-4 py-3 text-right font-mono text-sm font-bold">{(t.price || 0).toFixed(2)}</td>
-                                            <td className="px-4 py-3 text-right font-mono text-sm font-black text-text-main">{formatMoney(t.total_value || 0)}</td>
-                                            <td className="px-4 py-3 text-right font-mono text-[10px] text-text-muted">{formatMoney(t.fee || 0)}</td>
-                                            <td className="px-4 py-3 text-right font-mono text-sm font-bold">
-                                                {t.profit !== undefined ? (
-                                                    <span className={t.profit >= 0 ? 'text-danger' : 'text-success'}>
-                                                        {t.profit > 0 ? '+' : ''}{formatMoney(t.profit)}
-                                                    </span>
-                                                ) : '---'}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono text-sm font-bold">
-                                                {t.profit_pct !== undefined ? (
-                                                    <span className={t.profit_pct >= 0 ? 'text-danger' : 'text-success'}>
-                                                        {t.profit_pct > 0 ? '+' : ''}{(t.profit_pct).toFixed(2)}%
-                                                    </span>
-                                                ) : '---'}
-                                            </td>
-                                        </tr>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
+          </div>
         </div>
-    );
+
+        <WatchlistPanel items={watchlist} isLoading={isWatchlistLoading} onRefresh={refreshWatchlist} />
+      </div>
+
+      <PositionsTable positions={positions} isLoading={isLoadingPortfolio} formatMoney={formatMoney} />
+
+      <BacktestSection isScanRunning={scanState.is_scanning} />
+
+      <TradeHistoryPanel trades={trades} formatMoney={formatMoney} onExport={handleExportCSV} />
+
+      {isLoadingPortfolio && !portfolio && (
+        <div className="panel p-6 flex items-center justify-center text-text-muted gap-3">
+          <Loader2 className="w-5 h-5 animate-spin text-brand-primary" />
+          Dashboard 數據載入中...
+        </div>
+      )}
+    </div>
+  );
 }
-
-
-

@@ -109,3 +109,11 @@ class RiskManagerAgent(BaseAgent):
         """
         logger.debug(f"RiskManager analyzing exposure for {symbol}...")
         return super().generate_response(prompt)
+
+    def analyze_context(self, context: Dict[str, Any]) -> str:
+        return self.analyze(
+            context["symbol"],
+            context["name"],
+            context["current_price"],
+            context["portfolio"],
+        )

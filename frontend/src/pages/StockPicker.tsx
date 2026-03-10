@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Search, Activity, BookOpen, ShieldAlert, Cpu, ChevronDown, ChevronUp, ExternalLink, Loader2, CheckCircle2, CircleDashed, Clock, History } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import api from '../api/axiosConfig';
+import { analyzeSymbol } from '../api/analysis';
+import type { AnalysisResult } from '../types/analysis';
 
 interface AnalysisHistory {
     symbol: string;
@@ -31,7 +32,7 @@ const LOADING_STEPS = [
 export function StockPicker() {
   const [symbol, setSymbol] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState('');
   
   // Storage and Loading States
@@ -82,12 +83,12 @@ export function StockPicker() {
     }, 1000);
 
     try {
-      const response = await api.get(`/api/stock/analyze/${targetSymbol.trim()}`);
+      const response = await analyzeSymbol(targetSymbol.trim());
       
       const newHistoryItem: AnalysisHistory = {
           symbol: targetSymbol,
-          name: response.data.name || targetSymbol,
-          action: response.data.decision?.action || 'HOLD',
+          name: response.name || targetSymbol,
+          action: response.decision?.action || 'HOLD',
           timestamp: Date.now()
       };
       
@@ -102,7 +103,7 @@ export function StockPicker() {
       setLoadingStep(5);
       clearInterval(timerRef.current!);
       setTimeout(() => {
-          setResult(response.data);
+          setResult(response);
           setLoading(false);
       }, 500);
 
