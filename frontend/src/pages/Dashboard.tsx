@@ -1,4 +1,4 @@
-import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp, RefreshCcw, Cpu, Clock, Search, ShoppingCart, Info, Download } from 'lucide-react';
+import { RefreshCw, Bot, Loader2, TrendingUp, ChevronDown, ChevronUp, RefreshCcw, Cpu, Clock, Search, ShoppingCart, Download } from 'lucide-react';
 import { PerformanceChart } from '../components/charts/PerformanceChart';
 import { BacktestSection } from '../components/BacktestSection';
 import { useState, useEffect, useCallback } from 'react';
@@ -58,22 +58,38 @@ export function Dashboard() {
         change: number; change_pct: number; volume: number; is_realtime: boolean;
     }>>([]);
     const [isWatchlistLoading, setIsWatchlistLoading] = useState(true);
+    const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>(['2330', '2317', '2454', '2412', '0050', '6415']);
 
-    const WATCHLIST_SYMBOLS = ['2330', '2317', '2454', '2412', '0050', '6415'];
+    const fetchSettings = useCallback(async () => {
+        try {
+            const res = await api.get('/api/settings');
+            if (Array.isArray(res.data?.watchlist) && res.data.watchlist.length > 0) {
+                setWatchlistSymbols(res.data.watchlist);
+            }
+        } catch (e) {
+            console.error('Settings fetch failed:', e);
+        }
+    }, []);
 
     const fetchWatchlist = useCallback(async () => {
+        if (watchlistSymbols.length === 0) {
+            setWatchlist([]);
+            setIsWatchlistLoading(false);
+            return;
+        }
+
         setIsWatchlistLoading(true);
         try {
             const results = await Promise.allSettled(
-                WATCHLIST_SYMBOLS.map(sym => api.get(`/api/stock/quote/${sym}`))
+                watchlistSymbols.map(sym => api.get(`/api/stock/quote/${sym}`))
             );
             const items = results
                 .map((r, i) => {
                     if (r.status === 'fulfilled') {
                         const d = r.value.data;
                         return {
-                            symbol: WATCHLIST_SYMBOLS[i],
-                            name: d.name || WATCHLIST_SYMBOLS[i],
+                            symbol: watchlistSymbols[i],
+                            name: d.name || watchlistSymbols[i],
                             price: d.price || 0,
                             change: d.change || 0,
                             change_pct: d.change_pct || 0,
@@ -90,7 +106,7 @@ export function Dashboard() {
         } finally {
             setIsWatchlistLoading(false);
         }
-    }, []);
+    }, [watchlistSymbols]);
 
     // Market Scan State (擴充欄位)
     const [scanState, setScanState] = useState({
@@ -105,6 +121,10 @@ export function Dashboard() {
         candidates_found: 0,
         orders_placed: 0,
         next_scan_info: '每個交易日 09:10 及 12:30 自動執行',
+        // --- 無間斷掃描擴充 ---
+        auto_scan_enabled: false,
+        market_status: 'WAITING',
+        daily_api_cost_twd: 0.0,
     });
 
     const checkScanStatus = async () => {
@@ -156,6 +176,21 @@ export function Dashboard() {
             }
         } catch (e) {
             alert('啟動失敗，請確認後端是否正在運行中！');
+        }
+    };
+
+    const handleToggleAutoScan = async () => {
+        try {
+            const res = await api.post('/api/simulation/toggle_auto_scan');
+            if (res.status === 200) {
+                setScanState(prev => ({ 
+                    ...prev, 
+                    auto_scan_enabled: res.data.auto_scan_enabled 
+                }));
+                checkScanStatus(); // 立即刷新狀態
+            }
+        } catch (e) {
+            alert('切換失敗，請確認後端是否正在運行中！');
         }
     };
 
@@ -221,10 +256,15 @@ export function Dashboard() {
 
     useEffect(() => {
         refreshAllData();
-        fetchWatchlist();
+        fetchSettings();
         const interval = setInterval(refreshAllData, 30000); // Poll every 30s
+        return () => { clearInterval(interval); };
+    }, [fetchSettings]);
+
+    useEffect(() => {
+        fetchWatchlist();
         const watchlistInterval = setInterval(fetchWatchlist, 60000); // Watchlist every 60s
-        return () => { clearInterval(interval); clearInterval(watchlistInterval); };
+        return () => { clearInterval(watchlistInterval); };
     }, [fetchWatchlist]);
 
     // 格式化金錢
@@ -291,8 +331,28 @@ export function Dashboard() {
                     <button onClick={refreshAllData} className="btn btn-secondary gap-2 px-4 py-2 text-sm">
                         <RefreshCw className={`w-4 h-4 ${isLoadingPortfolio ? 'animate-spin' : ''}`} /> 刷新數據
                     </button>
-                    
-                    {scanState.is_scanning ? (
+
+                    {/* 無間斷掃描切換開關 */}
+                    <div className="flex items-center gap-3 px-4 py-1.5 bg-black/40 rounded-xl border border-white/10 ml-2">
+                        <span className="text-sm font-bold text-white flex items-center gap-2">
+                            <Bot className={`w-4 h-4 ${scanState.auto_scan_enabled ? 'text-brand-primary animate-pulse' : 'text-text-muted'}`} />
+                            全天候自動交易
+                        </span>
+                        <button 
+                            onClick={handleToggleAutoScan}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 focus:ring-offset-gray-900 ${
+                                scanState.auto_scan_enabled ? 'bg-brand-primary' : 'bg-gray-600'
+                            }`}
+                        >
+                            <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                    scanState.auto_scan_enabled ? 'translate-x-6' : 'translate-x-1'
+                                }`}
+                            />
+                        </button>
+                    </div>
+
+                    {scanState.is_scanning && !scanState.auto_scan_enabled ? (
                         <div className="flex items-center gap-3 bg-black/40 px-4 py-2 rounded-xl border border-brand-primary/30 min-w-[350px]">
                             <Loader2 className="w-4 h-4 text-brand-primary animate-spin shrink-0" />
                             <div className="flex flex-col w-full">
@@ -310,33 +370,53 @@ export function Dashboard() {
                                 )}
                             </div>
                         </div>
-                    ) : (
+                    ) : !scanState.auto_scan_enabled && (
                         <div className="flex items-center gap-3">
                             <button 
                                 onClick={handleScan}
                                 className="btn btn-primary glow-purple gap-2 px-6 py-2 bg-gradient-to-r from-brand-primary to-indigo-600 hover:scale-105 text-sm"
                             >
-                                <Bot className="w-4 h-4" /> 執行 AI 交易分析 (全市場)
+                                <Bot className="w-4 h-4" /> 執行單次 AI 分析
                             </button>
-                            <span className="text-xs text-text-muted whitespace-nowrap hidden md:inline-block">
-                                AI將自動掃描全市場2,000+支股票，篩選最佳買賣時機
-                            </span>
                         </div>
                     )}
                 </div>
 
-                <button onClick={handleReset} className="btn btn-danger gap-2 px-4 py-2 text-sm">
-                    <RefreshCw className="w-4 h-4" /> 重置模擬
-                </button>
+                <div className="flex items-center gap-4">
+                    {scanState.auto_scan_enabled && (
+                        <div className="flex items-center gap-2 text-xs font-mono bg-black/40 px-3 py-1.5 rounded-lg border border-white/5">
+                            <span className="text-text-muted">狀態:</span>
+                            <span className={`font-black uppercase tracking-wider ${
+                                scanState.market_status === 'OPEN' ? 'text-success animate-pulse' :
+                                scanState.market_status === 'WAITING' ? 'text-text-muted' : 'text-yellow-400'
+                            }`}>
+                                {scanState.market_status === 'OPEN' ? '開盤中-運作中' :
+                                 scanState.market_status === 'CLOSED' ? '已休市-待機中' : '等待連線...'}
+                            </span>
+                        </div>
+                    )}
+                    <button onClick={handleReset} className="btn btn-danger gap-2 px-4 py-2 text-sm">
+                        <RefreshCw className="w-4 h-4" /> 重置模擬
+                    </button>
+                </div>
             </div>
 
             {/* SECTION 2.5: AI 系統狀態說明 */}
             <div className="panel p-5 border border-white/5 space-y-4">
                 {/* 標題 */}
-                <div className="flex items-center gap-2">
-                    <Cpu className="w-4 h-4 text-brand-primary" />
-                    <h3 className="text-sm font-black uppercase tracking-widest">AI 自動交易系統說明</h3>
-                    <span className="text-[10px] text-text-muted font-normal ml-1">— 這個系統在做什麼？</span>
+                <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-brand-primary" />
+                        <h3 className="text-sm font-black uppercase tracking-widest">AI 自動交易系統說明</h3>
+                        <span className="text-[10px] text-text-muted font-normal ml-1">— 這個系統在做什麼？</span>
+                    </div>
+                    {/* API 花費預估 */}
+                    <div className="flex items-center gap-2 bg-black/30 px-3 py-1.5 rounded-lg border border-white/5">
+                        <span className="text-[10px] text-text-muted font-bold tracking-wider">今日 API 預估花費:</span>
+                        <span className="text-sm font-mono font-black text-warning">
+                            ${scanState.daily_api_cost_twd?.toFixed(1) || '0.0'} <span className="text-[10px]">TWD</span>
+                        </span>
+                    </div>
                 </div>
 
                 {/* 流程說明 */}
@@ -344,11 +424,10 @@ export function Dashboard() {
                     <div className="bg-black/20 rounded-xl p-3 border border-white/5 flex gap-3">
                         <Search className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
                         <div>
-                            <div className="text-xs font-black text-white mb-0.5">第一層：全市場技術篩選</div>
+                            <div className="text-xs font-black text-white mb-0.5">全市場自動掃描</div>
                             <div className="text-[10px] text-text-muted leading-relaxed">
-                                每個交易日 09:10 / 12:30，用 yfinance 批量下載全部台股 TWSE+TPEX 普通股（~2000+ 支）歷史 K 線，
-                                計算 RSI / KD / MACD / MA / 布林帶，取技術評分最高的前 30 名。
-                                <span className="text-brand-primary/70"> 此層免費，不消耗 API 配額。</span>
+                                開放「全天候自動交易」後，系統會在交易時間 (09:00 - 13:30) 內不斷掃描台股全市場。
+                                每次掃描完畢會進入 <span className="text-danger">15 分鐘冷卻</span> 避免消耗過多 API 額度。
                             </div>
                         </div>
                     </div>
@@ -357,9 +436,9 @@ export function Dashboard() {
                         <div>
                             <div className="text-xs font-black text-white mb-0.5">第二層：AI 四探員精析</div>
                             <div className="text-[10px] text-text-muted leading-relaxed">
-                                對前 30 名候選股執行四個 AI Agent 深度分析（技術分析師 + 情緒分析師 + 風控師 + 首席決策官），
-                                只有信心度 ≥ 70% 且決策為 BUY 才實際下模擬單。
-                                <span className="text-yellow-400/70"> 每筆分析約 0.002 USD。</span>
+                                對技術面突出的候選股執行四個 AI Agent 深度分析，
+                                只有信心度 ≥ 70% 且決策為 BUY 才實際下單。
+                                <span className="text-yellow-400/70"> 每筆分析約 $0.32 TWD。</span>
                             </div>
                         </div>
                     </div>
@@ -376,48 +455,51 @@ export function Dashboard() {
                 </div>
 
                 {/* 上次掃描狀態 */}
-                <div className="flex flex-wrap items-center gap-4 pt-1 border-t border-white/5">
-                    <div className="flex items-center gap-2 text-[11px]">
-                        <Clock className="w-3.5 h-3.5 text-text-muted" />
-                        <span className="text-text-muted">上次掃描：</span>
-                        <span className="text-white font-bold">
-                            {scanState.last_scan_ago
-                                ? scanState.last_scan_ago
-                                : scanState.last_scan_time
-                                    ? new Date(scanState.last_scan_time).toLocaleString('zh-TW')
-                                    : '尚未執行（等待第一次掃描）'
-                            }
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[11px]">
-                        <Clock className="w-3.5 h-3.5 text-brand-primary" />
-                        <span className="text-text-muted">自動排程：</span>
-                        <span className="text-brand-primary font-bold">{scanState.next_scan_info}</span>
-                    </div>
-                    {scanState.stocks_screened > 0 && (
-                        <>
-                            <div className="flex items-center gap-2 text-[11px]">
-                                <span className="text-text-muted">掃描股票：</span>
-                                <span className="text-white font-black">{scanState.stocks_screened.toLocaleString()} 支</span>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-1 border-t border-white/5">
+                    <div className="flex flex-wrap items-center gap-4">
+                        {scanState.is_scanning && scanState.auto_scan_enabled && (
+                            <div className="flex items-center gap-2 text-[11px] bg-brand-primary/10 px-2 py-1 rounded">
+                                <Loader2 className="w-3.5 h-3.5 text-brand-primary animate-spin" />
+                                <span className="text-brand-primary font-bold">{scanState.message}</span>
                             </div>
-                            <div className="flex items-center gap-2 text-[11px]">
-                                <span className="text-text-muted">技術篩選：</span>
-                                <span className="text-yellow-400 font-black">{scanState.candidates_found} 個候選</span>
+                        )}
+                        {!scanState.is_scanning && scanState.auto_scan_enabled && scanState.market_status === 'OPEN' && (
+                            <div className="flex items-center gap-2 text-[11px] bg-warning/10 px-2 py-1 rounded">
+                                <Clock className="w-3.5 h-3.5 text-warning" />
+                                <span className="text-warning font-bold">{scanState.message || '冷卻中...'}</span>
                             </div>
-                            <div className="flex items-center gap-2 text-[11px]">
-                                <span className="text-text-muted">AI 下單：</span>
-                                <span className={`font-black ${scanState.orders_placed > 0 ? 'text-success' : 'text-text-muted'}`}>
-                                    {scanState.orders_placed} 筆
-                                </span>
-                            </div>
-                        </>
-                    )}
-                    {scanState.last_scan_summary && (
-                        <div className="w-full flex items-start gap-2 text-[10px] text-text-muted mt-1">
-                            <Info className="w-3 h-3 shrink-0 mt-0.5" />
-                            <span>{scanState.last_scan_summary}</span>
+                        )}
+                        <div className="flex items-center gap-2 text-[11px]">
+                            <Clock className="w-3.5 h-3.5 text-text-muted" />
+                            <span className="text-text-muted">上次完成：</span>
+                            <span className="text-white font-bold">
+                                {scanState.last_scan_ago
+                                    ? scanState.last_scan_ago
+                                    : scanState.last_scan_time
+                                        ? new Date(scanState.last_scan_time).toLocaleString('zh-TW')
+                                        : '尚未執行'
+                                }
+                            </span>
                         </div>
-                    )}
+                        {scanState.stocks_screened > 0 && (
+                            <>
+                                <div className="flex items-center gap-2 text-[11px]">
+                                    <span className="text-text-muted">掃描股票：</span>
+                                    <span className="text-white font-black">{scanState.stocks_screened.toLocaleString()} 支</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-[11px]">
+                                    <span className="text-text-muted">技術篩選：</span>
+                                    <span className="text-yellow-400 font-black">{scanState.candidates_found} 檔</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-[11px]">
+                                    <span className="text-text-muted">AI 下單：</span>
+                                    <span className={`font-black ${scanState.orders_placed > 0 ? 'text-success' : 'text-text-muted'}`}>
+                                        {scanState.orders_placed} 筆
+                                    </span>
+                                </div>
+                            </>
+                        )}
+                    </div>
                 </div>
             </div>
 
@@ -710,3 +792,6 @@ export function Dashboard() {
         </div>
     );
 }
+
+
+

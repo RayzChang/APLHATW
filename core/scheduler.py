@@ -82,9 +82,9 @@ def job_daily_market_scan():
     try:
         # ── 共用 app.state 實例（避免重複 FinMind 登入）─────────────────
         try:
-            from api.app import fetcher as _fetcher, simulator as _simulator
-            fetcher   = _fetcher
-            simulator = _simulator
+            from api.app import _GLOBAL_APP_STATE
+            fetcher   = _GLOBAL_APP_STATE.fetcher
+            simulator = _GLOBAL_APP_STATE.simulator
         except Exception:
             fetcher = TWDataFetcher()
             from core.execution.simulator import TradeSimulator
@@ -256,13 +256,17 @@ def job_daily_market_scan():
                     symbol, stock_name, live_price,
                     tech_report, sent_report, risk_report
                 )
+                
+                # 簡單計算預估花費 (4個Agent約消耗總計 $0.01 美金 = $0.32 台幣)
+                scan_state["daily_api_cost_twd"] = scan_state.get("daily_api_cost_twd", 0.0) + 0.32
 
                 action     = decision.get("action", "HOLD")
                 confidence = decision.get("confidence", 0)
 
                 logger.info(
                     f"Scheduler: {symbol} → {action} "
-                    f"confidence={confidence:.0%}"
+                    f"confidence={confidence:.0%} "
+                    f"[Cost: {scan_state['daily_api_cost_twd']:.2f} TWD]"
                 )
 
                 # 只有 BUY 且信心 ≥ 70% 才下單
@@ -336,9 +340,9 @@ def job_check_simulation_stops():
         simulator = None
         fetcher   = None
         try:
-            from api.app import simulator as _sim, fetcher as _fet
-            simulator = _sim
-            fetcher   = _fet
+            from api.app import _GLOBAL_APP_STATE
+            simulator = _GLOBAL_APP_STATE.simulator
+            fetcher   = _GLOBAL_APP_STATE.fetcher
         except Exception:
             from core.execution.simulator import TradeSimulator
             simulator = TradeSimulator()
@@ -390,6 +394,82 @@ def job_check_simulation_stops():
         logger.error(f"Scheduler job_check_simulation_stops failed: {e}")
 
 
+# ─── 無間斷全市場掃描迴圈 ────────────────────────────────────────────────────────
+
+import asyncio
+
+async def continuous_market_scan_loop():
+    """
+    無間斷全市場掃描背景迴圈。
+    只要前端開啟 auto_scan_enabled，就在開盤時間內不斷執行掃描，
+    每次掃描完成後冷卻 15 分鐘。
+    """
+    from api.routes.simulation import scan_state
+    
+    logger.info("Scheduler: Continuous scan loop started waiting in background...")
+    
+    while True:
+        try:
+            # 1. 檢查是否啟用
+            if not scan_state.get("auto_scan_enabled", False):
+                scan_state["market_status"] = "WAITING"
+                await asyncio.sleep(5)
+                continue
+                
+            # 2. 判斷是否為台股開盤時間：週一到週五 09:00 - 13:30
+            now = datetime.now()
+            is_weekday = now.weekday() < 5  # 0-4 is Mon-Fri
+            
+            # 將時間轉換為分鐘數方便比較
+            current_minutes = now.hour * 60 + now.minute
+            open_minutes = 9 * 60        # 09:00
+            close_minutes = 13 * 60 + 30 # 13:30
+            
+            is_open = is_weekday and (open_minutes <= current_minutes <= close_minutes)
+            
+            if not is_open:
+                scan_state["market_status"] = "CLOSED"
+                scan_state["message"] = "非交易時間，待機中..."
+                await asyncio.sleep(60) # 休息一分鐘再確認
+                continue
+                
+            # --- 進入開盤時間且已啟用 ---
+            scan_state["market_status"] = "OPEN"
+            
+            # 確認沒有別的掃描正在進行
+            if not scan_state.get("is_scanning", False):
+                logger.info("Scheduler [Continuous]: Triggering market scan...")
+                # 執行原本的單次掃描邏輯（會自動更新各種狀態）
+                try:
+                    import anyio.to_thread
+                    # 使用 anyio 的 run_sync 避免阻塞並保留 anyio backend context (修復 NoEventLoopError)
+                    await anyio.to_thread.run_sync(job_daily_market_scan)
+                except Exception as e:
+                    logger.error(f"Continuous scan error: {e}")
+                    
+                # 3. 掃描完成後冷卻 15 分鐘
+                scan_state["message"] = "掃描完成。冷卻中 (倒數 15 分鐘)..."
+                logger.info("Scheduler [Continuous]: Scan finished. Cooling down for 15 minutes...")
+                
+                # 分段倒數，以便隨時響應停止指令
+                for i in range(15 * 60):
+                    if not scan_state.get("auto_scan_enabled", False):
+                        break
+                    if i % 60 == 0:
+                        mins_left = 15 - (i // 60)
+                        scan_state["message"] = f"冷卻中 (倒數 {mins_left} 分鐘)..."
+                    await asyncio.sleep(1)
+            else:
+                await asyncio.sleep(5)
+                
+        except asyncio.CancelledError:
+            logger.info("Scheduler: Continuous loop cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Scheduler [Continuous] outer loop error: {e}")
+            await asyncio.sleep(10)
+
+
 # ─── 初始化 ─────────────────────────────────────────────────────────────────
 
 def init_scheduler():
@@ -421,14 +501,13 @@ def init_scheduler():
         job_check_simulation_stops,
         CronTrigger(
             day_of_week="mon-fri",
-            hour="9-13",
+            hour="9-12",
             minute="*",
         ),
         id="check_simulation_stops",
         name="盤中停損/停利監控",
         replace_existing=True,
     )
-    # 13:00 之後到 13:30 的監控（單獨加一個）
     scheduler.add_job(
         job_check_simulation_stops,
         CronTrigger(
@@ -445,7 +524,10 @@ def init_scheduler():
     logger.info("Global Background Scheduler Started.")
 
 
+
 def shutdown_scheduler():
     if scheduler.running:
         scheduler.shutdown()
         logger.info("Global Background Scheduler Shutdown.")
+
+

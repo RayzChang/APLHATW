@@ -5,6 +5,8 @@
 - POST /manual    → 四 Agent 深度分析（僅分析，不交易）
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
@@ -15,6 +17,8 @@ from core.agents.sentiment_analyst import SentimentAnalystAgent
 from core.agents.risk_manager import RiskManagerAgent
 from core.agents.chief_decision_maker import ChiefDecisionMakerAgent
 
+_executor = ThreadPoolExecutor(max_workers=4)
+
 router = APIRouter()
 
 
@@ -23,32 +27,38 @@ class AnalyzeRequest(BaseModel):
 
 
 @router.post("/")
-def analyze_stocks(req: AnalyzeRequest):
+async def analyze_stocks(req: AnalyzeRequest):
     """
     技術面快速分析（不呼叫 AI，純指標計算）。
     回傳建議方向、掛單位置、指標解釋。
     """
-    results = []
-    for symbol in req.symbols:
-        symbol = symbol.strip().upper()
-        if not symbol:
-            continue
-        r = analyze_stock(symbol)
-        if r:
-            results.append({
-                "symbol":        r.symbol,
-                "name":          r.name,
-                "close":         r.close,
-                "change_pct":    r.change_pct,
-                "recommendation":r.recommendation,
-                "suggested_buy": r.suggested_buy,
-                "suggested_sell":r.suggested_sell,
-                "explanation":   r.explanation,
-                "technical":     r.technical,
-                "fundamental":   r.fundamental,
-                "chip":          r.chip,
-                "patterns":      r.patterns,
-            })
+    loop = asyncio.get_event_loop()
+    
+    def _run_batch():
+        results = []
+        for symbol in req.symbols:
+            symbol = symbol.strip().upper()
+            if not symbol:
+                continue
+            r = analyze_stock(symbol)
+            if r:
+                results.append({
+                    "symbol":        r.symbol,
+                    "name":          r.name,
+                    "close":         r.close,
+                    "change_pct":    r.change_pct,
+                    "recommendation":r.recommendation,
+                    "suggested_buy": r.suggested_buy,
+                    "suggested_sell":r.suggested_sell,
+                    "explanation":   r.explanation,
+                    "technical":     r.technical,
+                    "fundamental":   r.fundamental,
+                    "chip":          r.chip,
+                    "patterns":      r.patterns,
+                })
+        return results
+
+    results = await loop.run_in_executor(_executor, _run_batch)
     return {"count": len(results), "results": results}
 
 
@@ -112,43 +122,44 @@ def _run_agent_pipeline(symbol: str, simulator_summary: dict, current_position_s
 async def analyze_with_agents(req: AnalyzeRequest, request: Request):
     """
     四 Agent 深度分析，並將決策結果執行進模擬帳戶。
-    - BUY  → TradeSimulator.execute_signal()
-    - SELL → TradeSimulator.execute_signal()
-    - HOLD → 不動作
     """
     if not req.symbols:
         return {"error": "No symbols provided"}
 
     symbol    = req.symbols[0].strip().upper()
-    simulator = request.app.state.simulator
+    loop      = asyncio.get_event_loop()
+    
+    def _do_pipeline():
+        simulator = request.app.state.simulator
+        summary   = simulator.get_portfolio_summary()
+        cur_pos   = simulator.positions.get(symbol, {})
+        cur_shares = cur_pos.get("shares", 0)
 
-    summary   = simulator.get_portfolio_summary()
-    cur_pos   = simulator.positions.get(symbol, {})
-    cur_shares = cur_pos.get("shares", 0)
+        result = _run_agent_pipeline(symbol, summary, cur_shares)
+        if "error" in result:
+            return result
 
-    result = _run_agent_pipeline(symbol, summary, cur_shares)
-    if "error" in result:
+        decision = result.get("decision", {})
+        action   = decision.get("action", "HOLD")
+
+        trade_result = None
+        if action in ("BUY", "SELL"):
+            signal = {
+                "action":           action,
+                "stock_id":         symbol,
+                "name":             result["name"],
+                "current_price":    result["current_price"],
+                "confidence":       decision.get("confidence", 0.0),
+                "position_size_pct":decision.get("position_size_pct", 10),
+                "stop_loss_price":  decision.get("stop_loss_price"),
+                "take_profit_price":decision.get("take_profit_price"),
+            }
+            trade_result = simulator.execute_signal(signal)
+
+        result["trade_result"] = trade_result
         return result
 
-    decision = result.get("decision", {})
-    action   = decision.get("action", "HOLD")
-
-    trade_result = None
-    if action in ("BUY", "SELL"):
-        signal = {
-            "action":           action,
-            "stock_id":         symbol,
-            "name":             result["name"],
-            "current_price":    result["current_price"],
-            "confidence":       decision.get("confidence", 0.0),
-            "position_size_pct":decision.get("position_size_pct", 10),
-            "stop_loss_price":  decision.get("stop_loss_price"),
-            "take_profit_price":decision.get("take_profit_price"),
-        }
-        trade_result = simulator.execute_signal(signal)
-
-    result["trade_result"] = trade_result
-    return result
+    return await loop.run_in_executor(_executor, _do_pipeline)
 
 
 @router.post("/manual")
@@ -160,11 +171,14 @@ async def analyze_manual(req: AnalyzeRequest, request: Request):
     if not req.symbols:
         return {"error": "No symbols provided"}
 
-    symbol    = req.symbols[0].strip().upper()
-    simulator = request.app.state.simulator
+    symbol = req.symbols[0].strip().upper()
+    loop   = asyncio.get_event_loop()
+    
+    def _do_pipeline():
+        simulator = request.app.state.simulator
+        summary   = simulator.get_portfolio_summary()
+        cur_pos   = simulator.positions.get(symbol, {})
+        cur_shares = cur_pos.get("shares", 0)
+        return _run_agent_pipeline(symbol, summary, cur_shares)
 
-    summary   = simulator.get_portfolio_summary()
-    cur_pos   = simulator.positions.get(symbol, {})
-    cur_shares = cur_pos.get("shares", 0)
-
-    return _run_agent_pipeline(symbol, summary, cur_shares)
+    return await loop.run_in_executor(_executor, _do_pipeline)

@@ -9,8 +9,12 @@
 
 import requests
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Request
 from datetime import datetime, timedelta, timezone
+
+_executor = ThreadPoolExecutor(max_workers=4)
 
 router = APIRouter()
 
@@ -39,11 +43,11 @@ def _cache_ttl() -> int:
 
 
 @router.get("/index")
-def get_market_index(request: Request):
+async def get_market_index(request: Request):
     """
     取得大盤加權指數。
     優先走 TWSE MIS 即時 API；休市時走 TWSE 昨收價；
-    均失敗才呼叫 FinMind（並加快取，避免每 5 秒打一次）。
+    均失敗才呼叫 FinMind 歷史資料（並加快取，避免每 5 秒打一次）。
     """
     from loguru import logger
 
@@ -51,74 +55,92 @@ def get_market_index(request: Request):
     if _index_cache["data"] and time.time() < _index_cache["expires_at"]:
         return {**_index_cache["data"], "cached": True}
 
-    fetcher = request.app.state.fetcher
-    result = None
+    loop = asyncio.get_event_loop()
+    
+    def _fetch_blocking():
+        result = None
 
-    # ── 方案 A：TWSE MIS 直接取（盤中即時 / 盤後昨收）───────────
-    try:
-        url = (
-            "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
-            "?ex_ch=tse_t00.tw&json=1&delay=0"
-        )
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://mis.twse.com.tw/",
-        }
-        r = requests.get(url, headers=headers, timeout=5)
-        if r.ok:
-            row_list = r.json().get("msgArray", [])
-            if row_list:
-                row = row_list[0]
-                z_val = row.get("z", "-")
-                prev_close = float(row.get("y", 0) or 0)
-                price = float(z_val) if z_val not in ("-", "", None) else prev_close
-                if price > 0:
+        # ── 方案 A：TWSE MIS 直接取（盤中即時 / 盤後昨收）───────────
+        try:
+            # 修正 URL：直接存取 msgArray
+            url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw&json=1&delay=0"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://mis.twse.com.tw/",
+            }
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.ok:
+                data = r.json()
+                row_list = data.get("msgArray", [])
+                if row_list:
+                    row = row_list[0]
+                    # z: 當前成交價, y: 昨收
+                    z_val = row.get("z", "-")
+                    y_val = row.get("y", "0")
+                    prev_close = float(y_val or 0)
+                    price = float(z_val) if z_val not in ("-", "", None) else prev_close
+                    
+                    if price > 0:
+                        change = round(price - prev_close, 2)
+                        change_pct = round(change / prev_close * 100, 2) if prev_close else 0.0
+                        result = {
+                            "index": price,
+                            "change": change,
+                            "change_pct": change_pct,
+                            "timestamp": f"{row.get('d', '')} {row.get('t', '')}".strip(),
+                            "source": "twse",
+                        }
+        except Exception as e:
+            logger.debug(f"market/index TWSE failed: {e}")
+
+        # ── 方案 B：FinMind 歷史 K 線 fallback ───────────────────────
+        if not result:
+            try:
+                from core.data.tw_data_fetcher import TWDataFetcher
+                fetcher = TWDataFetcher()
+                end = datetime.now().strftime("%Y-%m-%d")
+                start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+                df = fetcher.fetch_klines("TAIEX", start, end)
+                if df is not None and not df.empty:
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2] if len(df) >= 2 else latest
+                    price = float(latest["close"])
+                    prev_close = float(prev["close"])
                     change = round(price - prev_close, 2)
-                    change_pct = round(change / prev_close * 100, 2) if prev_close else 0.0
+                    change_pct = round(change / prev_close * 100, 2)
                     result = {
                         "index": price,
                         "change": change,
                         "change_pct": change_pct,
-                        "timestamp": f"{row.get('d', '')} {row.get('t', '')}".strip(),
-                        "source": "twse",
+                        "timestamp": str(latest["date"]),
+                        "source": "finmind_history",
                     }
-    except Exception as e:
-        logger.debug(f"market/index TWSE failed: {e}")
+            except Exception as e:
+                logger.error(f"market/index FinMind history fallback failed: {e}")
 
-    # ── 方案 B：FinMind klines fallback（只在 TWSE 完全失敗時走）──
-    if not result:
-        try:
-            quote = fetcher.fetch_realtime_quote("t00")
-            if quote and quote.get("price"):
-                result = {
-                    "index": quote["price"],
-                    "change": quote.get("change", 0.0),
-                    "change_pct": quote.get("change_pct", 0.0),
-                    "timestamp": quote.get("note", ""),
-                    "source": "finmind_fallback",
-                }
-        except Exception as e:
-            logger.error(f"market/index FinMind fallback failed: {e}")
+        if not result:
+            result = {
+                "index": None,
+                "change": None,
+                "change_pct": None,
+                "timestamp": "",
+                "source": "unavailable",
+            }
+        return result
 
-    if not result:
-        result = {
-            "index": 0.0,
-            "change": 0.0,
-            "change_pct": 0.0,
-            "timestamp": "",
-            "source": "error",
-        }
+    result = await loop.run_in_executor(_executor, _fetch_blocking)
 
-    # ── 寫入快取 ──────────────────────────────────────────────────
-    ttl = _cache_ttl()
-    _index_cache["data"] = result
-    _index_cache["expires_at"] = time.time() + ttl
+    # ── 寫入快取 (只針對成功取得數值的結果) ──────────────────────
+    if result.get("index"):
+        ttl = _cache_ttl()
+        _index_cache["data"] = result
+        _index_cache["expires_at"] = time.time() + ttl
 
     return result
 
 
 @router.get("/status")
-def get_market_status():
+async def get_market_status():
     """
     判斷台股當前是否為交易時間 (週一~五 09:00~13:30 台灣時間)
     """

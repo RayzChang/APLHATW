@@ -10,7 +10,7 @@ LINE Notify 已於 2025/3/31 停止服務，改用 LINE Messaging API (Push Mess
   LINE_USER_ID              — 接收通知的 LINE 使用者 ID
 """
 
-import httpx
+import requests
 from loguru import logger
 from config.settings import LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID
 
@@ -47,8 +47,8 @@ def send_message(text: str) -> bool:
     }
 
     try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(PUSH_API, json=body, headers=headers)
+        import requests
+        resp = requests.post(PUSH_API, json=body, headers=headers, timeout=10)
         if resp.status_code == 200:
             logger.debug("LINE push OK")
             return True

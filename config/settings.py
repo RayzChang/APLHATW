@@ -155,3 +155,6 @@ AGENT_TEMPERATURES = {
     "risk":       0.1,
     "chief":      0.1,
 }
+
+# === 背景掃描週期 ===
+SCAN_INTERVAL_MINUTES = int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))

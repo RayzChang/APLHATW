@@ -14,13 +14,25 @@ def run_api():
     import uvicorn
     from config.settings import API_PORT
     try:
-        uvicorn.run("api.app:app", host="0.0.0.0", port=API_PORT, log_level="info")
+        uvicorn.run(
+            "api.app:app",
+            host="0.0.0.0",
+            port=API_PORT,
+            log_level="info",
+            loop="asyncio"
+        )
     except OSError as e:
         if "10048" in str(e) or "address already in use" in str(e).lower():
             alt_port = API_PORT + 1
             print(f"Port {API_PORT} in use, trying {alt_port}...")
             os.environ["API_PORT"] = str(alt_port)
-            uvicorn.run("api.app:app", host="0.0.0.0", port=alt_port, log_level="info")
+            uvicorn.run(
+                "api.app:app",
+                host="0.0.0.0",
+                port=alt_port,
+                log_level="info",
+                loop="asyncio"
+            )
         else:
             raise
 
@@ -33,20 +45,21 @@ if __name__ == "__main__":
     print("台股交易推手 - 啟動中...")
     print("=" * 50)
     
+    print("後端 API 啟動中...")
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()
     
-    time.sleep(2)
+    time.sleep(5)
     
+    print("前端開發伺服器啟動中...")
     frontend_thread = threading.Thread(target=run_frontend, daemon=True)
     frontend_thread.start()
     
     time.sleep(3)
-    # The Vite dev server defaults to port 5173
     url = f"http://localhost:5173"
+    print(f"瀏覽器開啟：{url}")
+    print("按 Ctrl+C 停止服務")
     webbrowser.open(url)
-    print(f"前端已啟動: {url}")
-    print("=" * 50)
     
     try:
         while True:

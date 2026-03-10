@@ -9,7 +9,8 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-import httpx
+import requests
+import json
 import pandas as pd
 from loguru import logger
 
@@ -40,7 +41,7 @@ class TWDataFetcher:
                 logger.warning(f"TWDataFetcher: FinMind token login failed: {e}")
         else:
             logger.warning("TWDataFetcher: FINMIND_TOKEN not set, rate limit may apply.")
-        self._refresh_stock_info()
+        # self._refresh_stock_info()  # Lazy loading: 改為需要時才呼叫
 
     # ------------------------------------------------------------------ #
     #   公開方法
@@ -108,11 +109,15 @@ class TWDataFetcher:
         end_date = datetime.now().strftime("%Y-%m-%d")
         return self.fetch_klines(stock_id, start_date, end_date)
 
-    def fetch_klines(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+    def fetch_klines(self, symbol: str, start: str = None, end: str = None, **kwargs) -> pd.DataFrame:
         """
         抓取歷史日K線。
-        回傳欄位：date, open, high, low, close, volume（按日期升冪排序）
         """
+        start = start or kwargs.get("start_date")
+        if not start:
+            start = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        if not end:
+            end = datetime.now().strftime("%Y-%m-%d")
         if symbol in FUTURES_SYMBOLS:
             return self._fetch_futures_klines(symbol, start, end)
         try:
@@ -307,10 +312,10 @@ class TWDataFetcher:
             f"?ex_ch={ex_ch}&json=1&delay=0"
         )
         try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp.raise_for_status()
-                data = resp.json()
+            import requests
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
             items = data.get("msgArray", [])
             if not items:
                 return None
@@ -345,6 +350,61 @@ class TWDataFetcher:
             logger.debug(f"_fetch_twse_quote({stock_id}, {market}): {e}")
             return None
 
+    def fetch_realtime_batch(self, stock_ids: list[str]) -> dict[str, dict]:
+        """
+        批量抓取即時報價 (TWSE MIS API)。
+        限制每次建議不超過 50 支以確保穩定。
+        """
+        # 分組處理，MIS API 對過長的 URL 可能會拒絕
+        results: dict[str, dict] = {}
+        batch_size = 50
+        for i in range(0, len(stock_ids), batch_size):
+            chunk = stock_ids[i:i + batch_size]
+            ex_chs = []
+            for sid in chunk:
+                market = _STOCK_TYPE_CACHE.get(sid, "tse")
+                ex_chs.append(f"{market}_{sid}.tw")
+            
+            ex_ch_param = "|".join(ex_chs)
+            url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ex_ch_param}&json=1&delay=0"
+            
+            try:
+                import requests
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                data = {}
+                if resp.status_code == 200:
+                    data = resp.json()
+                for item in data.get("msgArray", []):
+                            sid = item.get("c")
+                            if not sid: continue
+                            
+                            price_str = item.get("z", "")
+                            close_str = item.get("y", "0")
+                            price = self._safe_float(price_str if price_str not in ("-", "") else close_str)
+                            yesterday_close = self._safe_float(close_str)
+                            
+                            change = round(price - yesterday_close, 2)
+                            change_pct = round(change / yesterday_close * 100, 2) if yesterday_close else 0.0
+                            
+                            vol_raw = item.get("v", "0") or "0"
+                            volume = int(float(vol_raw.replace(",", "")) * 1000)
+                            
+                            results[sid] = {
+                                "price": price,
+                                "name": item.get("n", sid),
+                                "open": self._safe_float(item.get("o")),
+                                "high": self._safe_float(item.get("h")),
+                                "low": self._safe_float(item.get("l")),
+                                "volume": volume,
+                                "change": change,
+                                "change_pct": change_pct,
+                                "yesterday_close": yesterday_close,
+                            }
+            except Exception as e:
+                logger.error(f"fetch_realtime_batch chunk error: {e}")
+                
+        return results
+
     def _fetch_futures_quote(self, symbol: str) -> dict:
         """台指期大台 / 小台即時行情。"""
         symbol_map = {"TX": "TXFZH", "MTX": "MTXZH", "TXF": "TXFZH", "MXF": "MTXZH"}
@@ -354,10 +414,10 @@ class TWDataFetcher:
             f"?ex_ch=future_{code}.tw&json=1&delay=0"
         )
         try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp.raise_for_status()
-                data = resp.json()
+            import requests
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
             items = data.get("msgArray", [])
             if not items:
                 return {"price": 0.0, "name": symbol}
